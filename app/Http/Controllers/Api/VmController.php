@@ -20,8 +20,12 @@ class VmController extends Controller
     {
         $query = Vm::query()->with(['user', 'labTemplate']);
 
-        if ($request->filled('owner_id')) {
-            $query->where('user_id', $request->integer('owner_id'));
+        if ($request->filled('owner_id') || $request->filled('user_id') || $request->user()) {
+            $user = $this->mockUser($request);
+
+            if ($user->role === 'student') {
+                $query->where('user_id', $user->id);
+            }
         }
 
         return response()->json([
@@ -57,6 +61,13 @@ class VmController extends Controller
                 ($data['memory_mb'] ?? 1024) > $quota->max_memory_mb ||
                 ($data['disk_gb'] ?? 10) > $quota->max_disk_gb) {
                 return response()->json(['message' => 'Spesifikasi VM melebihi kuota.'], 422);
+            }
+
+            $requestedDiskGb = $data['disk_gb'] ?? 10;
+            $usedDiskGb = (int) $user->vms()->sum('disk_gb');
+
+            if ($usedDiskGb + $requestedDiskGb > $quota->max_disk_gb) {
+                return response()->json(['message' => 'Kuota storage VM sudah penuh.'], 422);
             }
         }
 
