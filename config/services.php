@@ -35,4 +35,12 @@ return [
         ],
     ],
 
+    'proxmox' => [
+    'host' => env('PROXMOX_HOST'),
+    'node' => env('PROXMOX_NODE'),
+    'token_id' => env('PROXMOX_TOKEN_ID'),
+    'token_secret' => env('PROXMOX_TOKEN_SECRET'),
+    'verify_ssl' => env('PROXMOX_VERIFY_SSL', false),
+],
+
 ];

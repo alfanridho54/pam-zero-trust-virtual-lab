@@ -1,0 +1,53 @@
+<?php
+
+namespace App\Policies;
+
+use App\Models\TerminalSession;
+use App\Models\User;
+use App\Models\Vm;
+use Illuminate\Auth\Access\Response;
+
+class TerminalSessionPolicy
+{
+    public function view(User $user, TerminalSession $terminalSession): Response
+    {
+        return $this->canAccessVm($user, $terminalSession->vm)
+            ? Response::allow()
+            : Response::deny('Anda tidak memiliki akses ke VM ini.');
+    }
+
+    public function create(User $user, Vm $vm): Response
+    {
+        if ($this->metadataFlag($vm, 'system_vm') || $this->metadataFlag($vm, 'critical')) {
+            return Response::deny('Terminal tidak tersedia untuk VM system atau critical.');
+        }
+
+        return $this->canAccessVm($user, $vm)
+            ? Response::allow()
+            : Response::deny('Anda tidak memiliki akses ke VM ini.');
+    }
+
+    public function close(User $user, TerminalSession $terminalSession): Response
+    {
+        return $this->view($user, $terminalSession);
+    }
+
+    private function canAccessVm(User $user, Vm $vm): bool
+    {
+        if ($user->role === 'admin') {
+            return true;
+        }
+
+        if ($user->role === 'guru') {
+            // TODO: Batasi ke siswa bimbingan setelah relasi guru-siswa tersedia.
+            return true;
+        }
+
+        return in_array($user->role, ['student', 'mahasiswa'], true) && $vm->user_id === $user->id;
+    }
+
+    private function metadataFlag(Vm $vm, string $key): bool
+    {
+        return filter_var($vm->metadata[$key] ?? false, FILTER_VALIDATE_BOOLEAN);
+    }
+}

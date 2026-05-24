@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\TerminalSessionController;
+use App\Services\ProxmoxService;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -15,3 +17,19 @@ Route::get('/dashboard/audit-logs', [DashboardController::class, 'auditLogs'])->
 Route::post('/dashboard/simulate/docker-lab', [DashboardController::class, 'createDockerLab'])->name('dashboard.simulate.docker-lab');
 Route::post('/dashboard/simulate/vms/{vm}/resources', [DashboardController::class, 'editVmResource'])->name('dashboard.simulate.vm.resources');
 Route::delete('/dashboard/simulate/vms/{vm}', [DashboardController::class, 'deleteVm'])->name('dashboard.simulate.vm.delete');
+Route::post('/dashboard/proxmox/vms/{node}/{vmid}/{action}', [DashboardController::class, 'proxmoxVmAction'])
+    ->whereNumber('vmid')
+    ->where('node', '[A-Za-z0-9._-]+')
+    ->where('action', 'start|stop|shutdown')
+    ->name('dashboard.proxmox.vms.action');
+
+Route::post('/vms/{vm}/terminal-sessions', [TerminalSessionController::class, 'store'])
+    ->name('terminal-sessions.store');
+Route::get('/terminal-sessions/{terminalSession}', [TerminalSessionController::class, 'show'])
+    ->name('terminal-sessions.show');
+Route::delete('/terminal-sessions/{terminalSession}', [TerminalSessionController::class, 'destroy'])
+    ->name('terminal-sessions.destroy');
+
+Route::get('/test-proxmox', function (ProxmoxService $proxmox) {
+    return response()->json($proxmox->listVms());
+})->name('proxmox.test.vms');

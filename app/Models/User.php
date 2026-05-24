@@ -60,6 +60,16 @@ class User extends Authenticatable
         return $this->hasMany(AuditLog::class);
     }
 
+    public function terminalSessions(): HasMany
+    {
+        return $this->hasMany(TerminalSession::class);
+    }
+
+    public function commandLogs(): HasMany
+    {
+        return $this->hasMany(CommandLog::class);
+    }
+
     public function quota(): HasOne
     {
         return $this->hasOne(UserQuota::class);
