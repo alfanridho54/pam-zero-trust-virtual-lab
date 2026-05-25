@@ -2,19 +2,26 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\CommandLogStatus;
 use App\Enums\TerminalSessionStatus;
 use App\Models\AuditLog;
+use App\Models\CommandLog;
 use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
+use App\Services\SshCommandService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
+use Throwable;
 use Illuminate\View\View;
 
 class TerminalSessionController extends Controller
 {
+    private const DEFAULT_TEST_COMMAND = 'whoami && hostname && uptime';
+    private const OUTPUT_EXCERPT_LIMIT = 4000;
+
     public function store(Request $request, Vm $vm): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
@@ -68,10 +75,81 @@ class TerminalSessionController extends Controller
         Gate::forUser($user)->authorize('view', $terminalSession);
 
         $terminalSession->load(['user', 'vm']);
+        $terminalSession->expireIfPastDue();
+        $commandLogs = $terminalSession->commandLogs()
+            ->recent()
+            ->limit(10)
+            ->get();
 
         return view('terminal-sessions.show', [
             'terminalSession' => $terminalSession,
+            'commandLogs' => $commandLogs,
+            'defaultCommand' => self::DEFAULT_TEST_COMMAND,
         ]);
+    }
+
+    public function executeCommand(Request $request, TerminalSession $terminalSession, SshCommandService $sshCommandService): RedirectResponse
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless($user, 403, 'Anda tidak memiliki akses ke VM ini.');
+
+        $terminalSession->load('vm');
+
+        Gate::forUser($user)->authorize('view', $terminalSession);
+
+        $terminalSession->expireIfPastDue();
+
+        $command = trim((string) $request->input('command', self::DEFAULT_TEST_COMMAND));
+        $command = $command !== '' ? $command : self::DEFAULT_TEST_COMMAND;
+
+        if (mb_strlen($command) > 1000) {
+            $commandLog = $this->createCommandLog($terminalSession, $user, $command);
+            $commandLog->markBlocked('Command terlalu panjang untuk POC terminal.');
+            $this->touchActivityWhenOpen($terminalSession);
+
+            return back()->with('error', 'Command terlalu panjang untuk POC terminal.');
+        }
+
+        $authorization = Gate::forUser($user)->inspect('execute', [CommandLog::class, $terminalSession, $command]);
+
+        if ($authorization->denied()) {
+            $commandLog = $this->createCommandLog($terminalSession, $user, $command);
+            $commandLog->markBlocked($authorization->message() ?: CommandLog::blockedReasonFor($command));
+            $this->touchActivityWhenOpen($terminalSession);
+
+            return back()->with('error', $authorization->message() ?: 'Command diblokir oleh policy terminal.');
+        }
+
+        $commandLog = $this->createCommandLog($terminalSession, $user, $command);
+
+        if ($terminalSession->isPending()) {
+            $terminalSession->forceFill([
+                'status' => TerminalSessionStatus::Active,
+                'metadata' => [
+                    ...($terminalSession->metadata ?? []),
+                    'ssh_ready' => true,
+                    'transport' => 'ssh-command-poc',
+                ],
+            ])->save();
+        }
+
+        try {
+            $result = $sshCommandService->execute($terminalSession, $command);
+            $outputExcerpt = $this->outputExcerpt($result->output ?: $result->error ?: 'SSH command execution failed.');
+
+            $result->successful
+                ? $commandLog->markSucceeded($result->exitCode, $result->durationMs, $outputExcerpt)
+                : $commandLog->markFailed($result->exitCode, $result->durationMs, $outputExcerpt);
+        } catch (Throwable) {
+            $commandLog->markFailed(null, null, 'SSH command execution failed.');
+        }
+
+        $terminalSession->touchActivity();
+
+        return back()->with(
+            $commandLog->isSucceeded() ? 'status' : 'error',
+            $commandLog->isSucceeded() ? 'Command berhasil dijalankan.' : 'Command gagal dijalankan.',
+        );
     }
 
     public function destroy(Request $request, TerminalSession $terminalSession): RedirectResponse
@@ -167,5 +245,43 @@ class TerminalSessionController extends Controller
             'description' => $description,
             'metadata' => ['source' => 'terminal-session', ...$metadata],
         ]);
+    }
+
+    private function createCommandLog(TerminalSession $terminalSession, User $user, string $command): CommandLog
+    {
+        return CommandLog::create([
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $user->id,
+            'vm_id' => $terminalSession->vm_id,
+            'command' => $command,
+            'status' => CommandLogStatus::Allowed,
+            'executed_at' => now(),
+            'metadata' => [
+                'source' => 'terminal-session-poc',
+                'client_ip' => request()->ip(),
+            ],
+        ]);
+    }
+
+    private function outputExcerpt(string $output): string
+    {
+        $password = config('services.terminal.ssh_password');
+        $excerpt = str($output)
+            ->replace("\0", '')
+            ->limit(self::OUTPUT_EXCERPT_LIMIT, "\n[output truncated]")
+            ->toString();
+
+        if (is_string($password) && $password !== '') {
+            $excerpt = str_replace($password, '[redacted]', $excerpt);
+        }
+
+        return $excerpt;
+    }
+
+    private function touchActivityWhenOpen(TerminalSession $terminalSession): void
+    {
+        if (! $terminalSession->isEnded() && ! $terminalSession->isExpired()) {
+            $terminalSession->touchActivity();
+        }
     }
 }

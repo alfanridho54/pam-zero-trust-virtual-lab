@@ -138,6 +138,17 @@ class TerminalSession extends Model
             || ($this->expires_at !== null && $this->expires_at->isPast());
     }
 
+    public function expireIfPastDue(?Carbon $at = null): bool
+    {
+        $now = $at ?? now();
+
+        if ($this->isEnded() || $this->expires_at === null || $this->expires_at->isFuture()) {
+            return false;
+        }
+
+        return $this->expire($now);
+    }
+
     public function isOwnedBy(User|int $user): bool
     {
         return $this->user_id === ($user instanceof User ? $user->id : $user);

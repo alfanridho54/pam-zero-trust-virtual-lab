@@ -36,11 +36,19 @@ return [
     ],
 
     'proxmox' => [
-    'host' => env('PROXMOX_HOST'),
-    'node' => env('PROXMOX_NODE'),
-    'token_id' => env('PROXMOX_TOKEN_ID'),
-    'token_secret' => env('PROXMOX_TOKEN_SECRET'),
-    'verify_ssl' => env('PROXMOX_VERIFY_SSL', false),
-],
+        'host' => env('PROXMOX_HOST'),
+        'node' => env('PROXMOX_NODE'),
+        'token_id' => env('PROXMOX_TOKEN_ID'),
+        'token_secret' => env('PROXMOX_TOKEN_SECRET'),
+        'verify_ssl' => env('PROXMOX_VERIFY_SSL', false),
+    ],
+
+    'terminal' => [
+        'target_host' => env('PRACTICE_VM_SSH_HOST'),
+        'target_port' => env('PRACTICE_VM_SSH_PORT', 22),
+        'target_username' => env('PRACTICE_VM_SSH_USERNAME', 'student'),
+        'ssh_password' => env('PRACTICE_VM_SSH_PASSWORD'),
+        'command_timeout' => env('PRACTICE_VM_COMMAND_TIMEOUT', 10),
+    ],
 
 ];

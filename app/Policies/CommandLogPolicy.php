@@ -29,6 +29,10 @@ class CommandLogPolicy
             return Response::deny('Anda tidak memiliki akses ke session terminal ini.');
         }
 
+        if ($this->protectedVm($terminalSession)) {
+            return Response::deny('Command diblokir untuk VM system atau protected.');
+        }
+
         $blockedReason = $this->blockedReason($command);
 
         return $blockedReason
@@ -43,7 +47,11 @@ class CommandLogPolicy
 
     private function canAccessSession(User $user, TerminalSession $terminalSession): bool
     {
-        if (! $terminalSession->isActive()) {
+        if ($terminalSession->isEnded() || $terminalSession->isExpired()) {
+            return false;
+        }
+
+        if (! $terminalSession->isActive() && ! $terminalSession->isPending()) {
             return false;
         }
 
@@ -59,5 +67,18 @@ class CommandLogPolicy
         return in_array($user->role, ['student', 'mahasiswa'], true)
             && $terminalSession->user_id === $user->id
             && $terminalSession->vm?->user_id === $user->id;
+    }
+
+    private function protectedVm(TerminalSession $terminalSession): bool
+    {
+        $metadata = $terminalSession->vm?->metadata ?? [];
+
+        foreach (['system_vm', 'critical', 'protected'] as $key) {
+            if (filter_var($metadata[$key] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

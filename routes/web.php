@@ -27,6 +27,8 @@ Route::post('/vms/{vm}/terminal-sessions', [TerminalSessionController::class, 's
     ->name('terminal-sessions.store');
 Route::get('/terminal-sessions/{terminalSession}', [TerminalSessionController::class, 'show'])
     ->name('terminal-sessions.show');
+Route::post('/terminal-sessions/{terminalSession}/commands', [TerminalSessionController::class, 'executeCommand'])
+    ->name('terminal-sessions.commands.store');
 Route::delete('/terminal-sessions/{terminalSession}', [TerminalSessionController::class, 'destroy'])
     ->name('terminal-sessions.destroy');
 
