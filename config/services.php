@@ -49,6 +49,8 @@ return [
         'target_username' => env('PRACTICE_VM_SSH_USERNAME', 'student'),
         'ssh_password' => env('PRACTICE_VM_SSH_PASSWORD'),
         'command_timeout' => env('PRACTICE_VM_COMMAND_TIMEOUT', 10),
+        'websocket_url' => env('TERMINAL_WEBSOCKET_URL', 'ws://127.0.0.1:8090'),
+        'websocket_ticket_ttl' => env('TERMINAL_WEBSOCKET_TICKET_TTL', 600),
     ],
 
 ];

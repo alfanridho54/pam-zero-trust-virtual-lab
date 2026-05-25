@@ -12,6 +12,7 @@ use App\Models\Vm;
 use App\Services\SshCommandService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Throwable;
@@ -85,6 +86,8 @@ class TerminalSessionController extends Controller
             'terminalSession' => $terminalSession,
             'commandLogs' => $commandLogs,
             'defaultCommand' => self::DEFAULT_TEST_COMMAND,
+            'terminalWebSocketUrl' => config('services.terminal.websocket_url'),
+            'terminalWebSocketTicket' => $this->makeWebSocketTicket($terminalSession, $user),
         ]);
     }
 
@@ -172,6 +175,33 @@ class TerminalSessionController extends Controller
             ->with('status', 'Terminal session ditutup.');
     }
 
+    public function revoke(Request $request, TerminalSession $terminalSession): RedirectResponse
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless($user, 403, 'Anda tidak memiliki akses ke session terminal ini.');
+
+        $terminalSession->load(['user', 'vm']);
+
+        Gate::forUser($user)->authorize('revoke', $terminalSession);
+
+        $revokedAt = now();
+
+        $terminalSession->forceFill([
+            'status' => TerminalSessionStatus::Revoked,
+            'ended_at' => $revokedAt,
+            'last_activity_at' => $revokedAt,
+        ])->save();
+
+        $this->audit($user, $terminalSession->vm, 'terminal_session.revoked', 'Admin melakukan revoke terminal session.', [
+            'terminal_session_id' => $terminalSession->id,
+            'terminal_session_uuid' => $terminalSession->session_uuid,
+            'target_user_id' => $terminalSession->user_id,
+            'target_user_email' => $terminalSession->user?->email,
+        ]);
+
+        return back()->with('status', 'Terminal session berhasil di-revoke.');
+    }
+
     private function makeSessionToken(): string
     {
         do {
@@ -179,6 +209,21 @@ class TerminalSessionController extends Controller
         } while (TerminalSession::where('session_token', $token)->exists());
 
         return $token;
+    }
+
+    private function makeWebSocketTicket(TerminalSession $terminalSession, User $user): ?string
+    {
+        if ($terminalSession->isEnded() || $terminalSession->isExpired()) {
+            return null;
+        }
+
+        return Crypt::encryptString(json_encode([
+            'session_uuid' => $terminalSession->session_uuid,
+            'user_id' => $user->id,
+            'expires_at' => now()
+                ->addSeconds((int) config('services.terminal.websocket_ticket_ttl', 600))
+                ->timestamp,
+        ], JSON_THROW_ON_ERROR));
     }
 
     private function targetHostFor(Vm $vm): string

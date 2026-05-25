@@ -2,8 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\CommandLogStatus;
+use App\Enums\TerminalSessionStatus;
 use App\Models\AuditLog;
+use App\Models\CommandLog;
 use App\Models\LabTemplate;
+use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
 use App\Services\ProxmoxService;
@@ -37,6 +41,14 @@ class DashboardController extends Controller
     public function auditLogs(): View
     {
         return $this->view('audit-logs');
+    }
+
+    public function socMonitoring(Request $request): View
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses ke SOC monitoring.');
+
+        return $this->view('soc');
     }
 
     public function createDockerLab(): RedirectResponse
@@ -165,8 +177,9 @@ class DashboardController extends Controller
             ->map(fn (array $vm) => $this->formatRealVm($vm, $user, $localVms))
             ->filter(fn (array $vm) => $vm['can_view'])
             ->values();
+        $canViewPamMonitoring = $this->roleFor($user) === 'admin';
 
-        return view('dashboard.index', [
+        $data = [
             'section' => $section,
             'currentUser' => $user,
             'templates' => LabTemplate::query()->latest()->get(),
@@ -174,13 +187,32 @@ class DashboardController extends Controller
             'realVmResponse' => $realVmResponse,
             'realVms' => $realVms,
             'auditLogs' => AuditLog::with(['user', 'vm'])->latest()->limit(50)->get(),
+            'canViewPamMonitoring' => $canViewPamMonitoring,
+            'recentCommandLogs' => $canViewPamMonitoring ? $this->recentCommandLogs() : collect(),
+            'activeTerminalSessions' => $canViewPamMonitoring ? $this->activeTerminalSessions() : collect(),
+            'blockedCommandLogs' => $canViewPamMonitoring ? $this->blockedCommandLogs() : collect(),
+            'terminalActivityTimeline' => $canViewPamMonitoring ? $this->terminalActivityTimeline() : collect(),
             'stats' => [
                 'templates' => LabTemplate::count(),
                 'vms' => $realVms->isNotEmpty() ? $realVms->count() : $visibleLocalVms->count(),
                 'auditLogs' => AuditLog::count(),
                 'users' => User::count(),
             ],
-        ]);
+        ];
+
+        if ($section === 'overview' && $this->roleFor($user) === 'student') {
+            return view('dashboard.student', $data);
+        }
+
+        if ($section === 'audit-logs') {
+            return view('dashboard.audit-logs', $data);
+        }
+
+        if ($section === 'soc') {
+            return view('dashboard.soc', $data);
+        }
+
+        return view('dashboard.index', $data);
     }
 
     private function localVmsForUser(?User $user): Collection
@@ -226,6 +258,177 @@ class DashboardController extends Controller
             'is_critical' => $critical,
             'is_system_vm' => $systemVm,
         ];
+    }
+
+    private function recentCommandLogs(): Collection
+    {
+        return CommandLog::with(['user', 'vm', 'terminalSession'])
+            ->recent()
+            ->limit(10)
+            ->get()
+            ->map(fn (CommandLog $log) => $this->formatCommandLog($log));
+    }
+
+    private function activeTerminalSessions(): Collection
+    {
+        return TerminalSession::with(['user', 'vm'])
+            ->active()
+            ->where(fn ($query) => $query
+                ->whereNull('expires_at')
+                ->orWhere('expires_at', '>', now()))
+            ->latest('last_activity_at')
+            ->limit(10)
+            ->get()
+            ->map(fn (TerminalSession $session) => $this->formatTerminalSession($session));
+    }
+
+    private function blockedCommandLogs(): Collection
+    {
+        return CommandLog::with(['user', 'vm', 'terminalSession'])
+            ->blocked()
+            ->recent()
+            ->limit(10)
+            ->get()
+            ->map(fn (CommandLog $log) => $this->formatCommandLog($log));
+    }
+
+    private function terminalActivityTimeline(): Collection
+    {
+        $sessions = TerminalSession::with(['user', 'vm'])
+            ->latest('started_at')
+            ->limit(10)
+            ->get()
+            ->flatMap(function (TerminalSession $session): array {
+                $items = [
+                    [
+                        'type' => 'session_started',
+                        'label' => 'Session started',
+                        'style' => 'badge-allowed',
+                        'user_name' => $session->user?->name ?? '-',
+                        'user_email' => $session->user?->email ?? '',
+                        'vm_name' => $session->vm?->name ?? '-',
+                        'session_uuid' => $session->session_uuid,
+                        'description' => 'Terminal session opened',
+                        'occurred_at' => $session->started_at,
+                    ],
+                ];
+
+                if ($session->ended_at !== null) {
+                    $items[] = [
+                        'type' => 'session_'.$session->status->value,
+                        'label' => 'Session '.$session->status->value,
+                        'style' => $this->terminalStatusBadgeClass($session->status->value),
+                        'user_name' => $session->user?->name ?? '-',
+                        'user_email' => $session->user?->email ?? '',
+                        'vm_name' => $session->vm?->name ?? '-',
+                        'session_uuid' => $session->session_uuid,
+                        'description' => 'Terminal session '.$session->status->value,
+                        'occurred_at' => $session->ended_at,
+                    ];
+                }
+
+                return $items;
+            });
+
+        $commands = CommandLog::with(['user', 'vm', 'terminalSession'])
+            ->recent()
+            ->limit(20)
+            ->get()
+            ->map(fn (CommandLog $log) => [
+                'type' => $log->isBlocked() ? 'command_blocked' : 'command_recorded',
+                'label' => $log->isBlocked() ? 'Command blocked' : 'Command '.$log->status->value,
+                'style' => $this->commandStatusBadgeClass($log->status->value),
+                'user_name' => $log->user?->name ?? '-',
+                'user_email' => $log->user?->email ?? '',
+                'vm_name' => $log->vm?->name ?? '-',
+                'session_uuid' => $log->terminalSession?->session_uuid,
+                'description' => $log->command,
+                'occurred_at' => $log->executed_at ?? $log->created_at,
+            ]);
+
+        return $sessions
+            ->merge($commands)
+            ->filter(fn (array $item) => $item['occurred_at'] !== null)
+            ->sortByDesc('occurred_at')
+            ->take(15)
+            ->values();
+    }
+
+    private function formatCommandLog(CommandLog $log): array
+    {
+        return [
+            'user_name' => $log->user?->name ?? '-',
+            'user_email' => $log->user?->email ?? '',
+            'vm_name' => $log->vm?->name ?? '-',
+            'session_uuid' => $log->terminalSession?->session_uuid,
+            'command' => $log->command,
+            'status' => $log->status->value,
+            'status_class' => $this->commandStatusBadgeClass($log->status->value),
+            'blocked_reason' => $log->blocked_reason,
+            'executed_at' => $log->executed_at ?? $log->created_at,
+            'output_excerpt' => $this->safeCommandOutputExcerpt($log->output_excerpt),
+        ];
+    }
+
+    private function formatTerminalSession(TerminalSession $session): array
+    {
+        return [
+            'user_name' => $session->user?->name ?? '-',
+            'user_email' => $session->user?->email ?? '',
+            'vm_name' => $session->vm?->name ?? '-',
+            'id' => $session->id,
+            'session_uuid' => $session->session_uuid,
+            'ssh_host' => $session->ssh_host,
+            'ssh_port' => $session->ssh_port,
+            'ssh_username' => $session->ssh_username,
+            'status' => $session->status->value,
+            'status_class' => $this->terminalStatusBadgeClass($session->status->value),
+            'can_revoke' => $session->isActive(),
+            'started_at' => $session->started_at,
+            'expires_at' => $session->expires_at,
+            'last_activity_at' => $session->last_activity_at,
+        ];
+    }
+
+    private function commandStatusBadgeClass(string $status): string
+    {
+        return match ($status) {
+            CommandLogStatus::Succeeded->value => 'badge-succeeded',
+            CommandLogStatus::Failed->value => 'badge-failed',
+            CommandLogStatus::Blocked->value => 'badge-blocked',
+            CommandLogStatus::Allowed->value => 'badge-allowed',
+            default => 'badge-other',
+        };
+    }
+
+    private function terminalStatusBadgeClass(string $status): string
+    {
+        return match ($status) {
+            TerminalSessionStatus::Active->value => 'badge-succeeded',
+            TerminalSessionStatus::Expired->value => 'badge-blocked',
+            TerminalSessionStatus::Revoked->value => 'badge-failed',
+            TerminalSessionStatus::Closed->value => 'badge-closed',
+            default => 'badge-allowed',
+        };
+    }
+
+    private function safeCommandOutputExcerpt(?string $output): ?string
+    {
+        if ($output === null || $output === '') {
+            return null;
+        }
+
+        $excerpt = str($output)
+            ->replace("\0", '')
+            ->limit(600, "\n[output truncated]")
+            ->toString();
+        $sshPassword = config('services.terminal.ssh_password');
+
+        if (is_string($sshPassword) && $sshPassword !== '') {
+            $excerpt = str_replace($sshPassword, '[redacted]', $excerpt);
+        }
+
+        return $excerpt;
     }
 
     private function findLocalVm(string $node, int $vmid): ?Vm

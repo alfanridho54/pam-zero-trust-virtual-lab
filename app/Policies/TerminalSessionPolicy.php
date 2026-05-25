@@ -32,6 +32,17 @@ class TerminalSessionPolicy
         return $this->view($user, $terminalSession);
     }
 
+    public function revoke(User $user, TerminalSession $terminalSession): Response
+    {
+        if ($user->role !== 'admin') {
+            return Response::deny('Hanya admin yang dapat revoke terminal session.');
+        }
+
+        return $terminalSession->isActive()
+            ? Response::allow()
+            : Response::deny('Terminal session tidak aktif.');
+    }
+
     private function canAccessVm(User $user, Vm $vm): bool
     {
         if ($user->role === 'admin') {

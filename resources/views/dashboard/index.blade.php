@@ -1,199 +1,3 @@
-<!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Dashboard PAM Proxmox</title>
-    <style>
-        :root {
-            --bg: #f4f7fb;
-            --panel: #ffffff;
-            --line: #e5e7eb;
-            --muted: #64748b;
-            --text: #0f172a;
-            --blue: #2563eb;
-            --indigo: #4f46e5;
-            --green: #16a34a;
-            --amber: #d97706;
-            --red: #dc2626;
-        }
-
-        * { box-sizing: border-box; }
-        body {
-            margin: 0;
-            background: var(--bg);
-            color: var(--text);
-            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        }
-
-        a { color: inherit; text-decoration: none; }
-        button { font: inherit; }
-        .shell { display: flex; min-height: 100vh; }
-        .sidebar {
-            width: 260px;
-            background: #0f172a;
-            color: #e2e8f0;
-            padding: 24px 18px;
-            position: sticky;
-            top: 0;
-            height: 100vh;
-        }
-        .brand {
-            display: flex;
-            gap: 12px;
-            align-items: center;
-            padding: 4px 8px 28px;
-        }
-        .brand-mark {
-            display: grid;
-            place-items: center;
-            width: 42px;
-            height: 42px;
-            border-radius: 8px;
-            background: linear-gradient(135deg, var(--blue), var(--indigo));
-            color: white;
-            font-weight: 800;
-        }
-        .brand-title { font-size: 15px; font-weight: 800; }
-        .brand-subtitle { color: #94a3b8; font-size: 12px; margin-top: 2px; }
-        .nav { display: grid; gap: 8px; }
-        .nav a {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 11px 12px;
-            border-radius: 8px;
-            color: #cbd5e1;
-            font-size: 14px;
-            font-weight: 650;
-        }
-        .nav a.active, .nav a:hover { background: #1e293b; color: white; }
-        .main { flex: 1; min-width: 0; }
-        .header {
-            height: 76px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 32px;
-            background: rgba(255,255,255,.9);
-            border-bottom: 1px solid var(--line);
-            backdrop-filter: blur(10px);
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
-        .page-title { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: 0; }
-        .page-subtitle { margin-top: 4px; color: var(--muted); font-size: 13px; }
-        .content { padding: 28px 32px 48px; }
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 16px;
-            margin-bottom: 22px;
-        }
-        .card {
-            background: var(--panel);
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            box-shadow: 0 8px 24px rgba(15, 23, 42, .06);
-        }
-        .stat { padding: 18px; }
-        .stat-label { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
-        .stat-value { margin-top: 8px; font-size: 30px; font-weight: 850; }
-        .grid-two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-        .section { margin-top: 18px; overflow: hidden; }
-        .section-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 18px 20px;
-            border-bottom: 1px solid var(--line);
-        }
-        .section-title { margin: 0; font-size: 16px; font-weight: 800; }
-        .section-note { margin-top: 3px; color: var(--muted); font-size: 13px; }
-        .table-wrap { overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; min-width: 760px; }
-        th {
-            color: #475569;
-            background: #f8fafc;
-            font-size: 12px;
-            text-align: left;
-            text-transform: uppercase;
-            padding: 12px 16px;
-            border-bottom: 1px solid var(--line);
-        }
-        td {
-            padding: 14px 16px;
-            border-bottom: 1px solid #eef2f7;
-            vertical-align: middle;
-            font-size: 14px;
-        }
-        tr:last-child td { border-bottom: 0; }
-        .muted { color: var(--muted); }
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            min-height: 24px;
-            padding: 3px 9px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: 800;
-            text-transform: capitalize;
-        }
-        .badge-running { background: #dcfce7; color: #166534; }
-        .badge-stopped { background: #fef3c7; color: #92400e; }
-        .badge-deleted { background: #fee2e2; color: #991b1b; }
-        .badge-other { background: #e0e7ff; color: #3730a3; }
-        .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 36px;
-            padding: 0 13px;
-            border: 1px solid transparent;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 800;
-            white-space: nowrap;
-        }
-        .btn-primary { background: var(--blue); color: white; }
-        .btn-soft { background: #eef2ff; color: #3730a3; border-color: #c7d2fe; }
-        .btn-danger { background: #fff1f2; color: #be123c; border-color: #fecdd3; }
-        .btn:disabled { cursor: not-allowed; opacity: .45; }
-        .flash {
-            margin-bottom: 18px;
-            padding: 12px 14px;
-            background: #eff6ff;
-            border: 1px solid #bfdbfe;
-            color: #1d4ed8;
-            border-radius: 8px;
-            font-weight: 700;
-            font-size: 14px;
-        }
-        .flash-error {
-            background: #fff1f2;
-            border-color: #fecdd3;
-            color: #be123c;
-        }
-        .feature-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-bottom: 22px; }
-        .feature { padding: 22px; border-left: 4px solid var(--blue); }
-        .feature:nth-child(2) { border-left-color: var(--indigo); }
-        .feature h3 { margin: 0 0 8px; font-size: 18px; }
-        .feature p { margin: 0 0 18px; color: var(--muted); line-height: 1.55; }
-
-        @media (max-width: 980px) {
-            .shell { display: block; }
-            .sidebar { width: auto; height: auto; position: relative; }
-            .stats, .grid-two, .feature-grid { grid-template-columns: 1fr; }
-            .header { position: relative; padding: 18px; height: auto; align-items: flex-start; gap: 14px; }
-            .content { padding: 18px; }
-        }
-    </style>
-</head>
-<body>
 @php
     $title = match ($section) {
         'templates' => 'Akses VM Praktikum',
@@ -202,338 +6,467 @@
         default => 'Dashboard PAM Proxmox',
     };
 
-    $navItems = [
-        ['label' => 'Dashboard', 'route' => 'dashboard', 'section' => 'overview'],
-        ['label' => 'Akses VM Praktikum', 'route' => 'dashboard.templates', 'section' => 'templates'],
-        ['label' => 'Kelola Lab Pribadi', 'route' => 'dashboard.vms', 'section' => 'vms'],
-        ['label' => 'Audit Logs', 'route' => 'dashboard.audit-logs', 'section' => 'audit-logs'],
-    ];
-
-    $statusClass = fn ($vm) => $vm->trashed() ? 'badge-deleted' : ($vm->status === 'running' ? 'badge-running' : ($vm->status === 'stopped' ? 'badge-stopped' : 'badge-other'));
+    $statusClass = fn ($vm) => $vm->trashed() ? 'deleted' : ($vm->status === 'running' ? 'running' : ($vm->status === 'stopped' ? 'stopped' : 'default'));
     $statusLabel = fn ($vm) => $vm->trashed() ? 'deleted' : $vm->status;
-    $realStatusClass = fn ($status) => $status === 'running' ? 'badge-running' : ($status === 'stopped' ? 'badge-stopped' : 'badge-other');
+    $realStatusClass = fn ($status) => $status === 'running' ? 'running' : ($status === 'stopped' ? 'stopped' : 'default');
+    $shortSession = fn (?string $uuid) => $uuid ? substr($uuid, 0, 8) : '-';
 @endphp
-<div class="shell">
-    <aside class="sidebar">
-        <div class="brand">
-            <div class="brand-mark">PAM</div>
-            <div>
-                <div class="brand-title">Mock Proxmox Lab</div>
-                <div class="brand-subtitle">Zero Trust Dashboard</div>
-            </div>
-        </div>
-        <nav class="nav">
-            @foreach ($navItems as $item)
-                <a href="{{ route($item['route']) }}" class="{{ $section === $item['section'] ? 'active' : '' }}">{{ $item['label'] }}</a>
-            @endforeach
-        </nav>
-    </aside>
 
-    <main class="main">
-        <header class="header">
+<x-layouts.app :title="$title" :user="$currentUser ?? null">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6 mb-8">
+        <x-stat-card label="Total Template" :value="$stats['templates']" accent="indigo" />
+        <x-stat-card label="Total VM" :value="$stats['vms']" accent="blue" />
+        <x-stat-card label="Total Audit Log" :value="$stats['auditLogs']" accent="amber" />
+        <x-stat-card label="Total User" :value="$stats['users']" accent="emerald" />
+    </div>
+
+    @if ($section === 'overview')
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <x-card>
+                <div class="p-6">
+                    <h3 class="text-base font-semibold text-slate-900">Akses VM Praktikum</h3>
+                    <p class="mt-1 text-sm text-slate-500">Daftar template lab yang disediakan guru untuk simulasi akses praktikum siswa.</p>
+                    <a href="{{ route('dashboard.templates') }}" class="mt-4 inline-flex items-center justify-center rounded-lg bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200 hover:bg-indigo-100">Buka Template</a>
+                </div>
+            </x-card>
+            <x-card>
+                <div class="p-6">
+                    <h3 class="text-base font-semibold text-slate-900">Kelola Lab Pribadi</h3>
+                    <p class="mt-1 text-sm text-slate-500">Kelola VM milik user, simulasi perubahan resource, dan soft delete untuk kebutuhan demo.</p>
+                    <a href="{{ route('dashboard.vms') }}" class="mt-4 inline-flex items-center justify-center rounded-lg bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200 hover:bg-indigo-100">Buka VM</a>
+                </div>
+            </x-card>
+        </div>
+    @endif
+
+    @if (in_array($section, ['overview', 'templates'], true))
+        <x-card title="Template Lab" subtitle="Template praktikum yang tersedia untuk siswa." class="mb-8">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-100">
+                    <thead>
+                        <tr class="bg-slate-50/50">
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Nama</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Proxmox Template</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">CPU</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">RAM</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Disk</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        @foreach ($templates as $template)
+                            <tr class="hover:bg-slate-50/50 transition-colors">
+                                <td class="px-6 py-4 text-sm">
+                                    <span class="font-medium text-slate-900">{{ $template->name }}</span>
+                                    @if ($template->description)
+                                        <p class="text-xs text-slate-500 mt-0.5">{{ $template->description }}</p>
+                                    @endif
+                                </td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->proxmox_template_id }}</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->cpu_cores }} core</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->memory_mb }} MB</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->disk_gb }} GB</td>
+                                <td class="px-6 py-4">
+                                    <x-badge :type="$template->is_active ? 'running' : 'inactive'">{{ $template->is_active ? 'active' : 'inactive' }}</x-badge>
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+            @if ($templates->isEmpty())
+                <x-empty-state message="Belum ada template lab tersedia." />
+            @endif
+        </x-card>
+    @endif
+
+    @if (in_array($section, ['overview', 'vms'], true))
+        <div class="flex items-center justify-between mb-4">
             <div>
-                <h1 class="page-title">{{ $title }}</h1>
-                <div class="page-subtitle">Monitoring lab, VM praktikum, dan aktivitas pengguna Proxmox.</div>
+                <h2 class="text-base font-semibold text-slate-900">Virtual Machine Proxmox</h2>
+                <p class="mt-0.5 text-sm text-slate-500">Daftar VM real dari Proxmox beserta status resource dan action power.</p>
             </div>
             <form method="POST" action="{{ route('dashboard.simulate.docker-lab') }}">
                 @csrf
-                <button class="btn btn-primary" type="submit">Create Docker Lab untuk owner_id=3</button>
+                <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                    Create Docker Lab
+                </button>
             </form>
-        </header>
-
-        <div class="content">
-            @if (session('status'))
-                <div class="flash">{{ session('status') }}</div>
-            @endif
-            @if (session('error'))
-                <div class="flash flash-error">{{ session('error') }}</div>
-            @endif
-
-            <section class="stats">
-                <div class="card stat">
-                    <div class="stat-label">Total Template</div>
-                    <div class="stat-value">{{ $stats['templates'] }}</div>
-                </div>
-                <div class="card stat">
-                    <div class="stat-label">Total VM</div>
-                    <div class="stat-value">{{ $stats['vms'] }}</div>
-                </div>
-                <div class="card stat">
-                    <div class="stat-label">Total Audit Log</div>
-                    <div class="stat-value">{{ $stats['auditLogs'] }}</div>
-                </div>
-                <div class="card stat">
-                    <div class="stat-label">Total User</div>
-                    <div class="stat-value">{{ $stats['users'] }}</div>
-                </div>
-            </section>
-
-            @if ($section === 'overview')
-                <section class="feature-grid">
-                    <div class="card feature">
-                        <h3>Akses VM Praktikum</h3>
-                        <p>Daftar template lab yang disediakan guru untuk simulasi akses praktikum siswa.</p>
-                        <a class="btn btn-soft" href="{{ route('dashboard.templates') }}">Buka Template</a>
-                    </div>
-                    <div class="card feature">
-                        <h3>Kelola Lab Pribadi</h3>
-                        <p>Kelola VM milik user, simulasi perubahan resource, dan soft delete untuk kebutuhan demo.</p>
-                        <a class="btn btn-soft" href="{{ route('dashboard.vms') }}">Buka VM</a>
-                    </div>
-                </section>
-            @endif
-
-            @if (in_array($section, ['overview', 'templates'], true))
-                <section class="card section">
-                    <div class="section-head">
-                        <div>
-                            <h2 class="section-title">Template Lab</h2>
-                            <div class="section-note">Template praktikum yang tersedia untuk siswa.</div>
-                        </div>
-                    </div>
-                    <div class="table-wrap">
-                        <table>
-                            <thead>
-                            <tr>
-                                <th>Nama</th>
-                                <th>Proxmox Template</th>
-                                <th>CPU</th>
-                                <th>RAM</th>
-                                <th>Disk</th>
-                                <th>Status</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            @foreach ($templates as $template)
-                                <tr>
-                                    <td><strong>{{ $template->name }}</strong><div class="muted">{{ $template->description }}</div></td>
-                                    <td>{{ $template->proxmox_template_id }}</td>
-                                    <td>{{ $template->cpu_cores }} core</td>
-                                    <td>{{ $template->memory_mb }} MB</td>
-                                    <td>{{ $template->disk_gb }} GB</td>
-                                    <td><span class="badge {{ $template->is_active ? 'badge-running' : 'badge-stopped' }}">{{ $template->is_active ? 'active' : 'inactive' }}</span></td>
-                                </tr>
-                            @endforeach
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-            @endif
-
-            @if (in_array($section, ['overview', 'vms'], true))
-                <section class="card section">
-                    <div class="section-head">
-                        <div>
-                            <h2 class="section-title">Virtual Machine Proxmox</h2>
-                            <div class="section-note">Daftar VM real dari Proxmox beserta status resource dan action power.</div>
-                        </div>
-                    </div>
-                    @if (! ($realVmResponse['success'] ?? false))
-                        <div class="flash" style="margin: 18px 20px;">
-                            Proxmox API gagal dibaca: {{ $realVmResponse['message'] ?? 'Unknown error' }}
-                        </div>
-                    @endif
-                    <div class="table-wrap">
-                        <table>
-                            <thead>
-                            <tr>
-                                <th>VMID</th>
-                                <th>Name</th>
-                                <th>Node</th>
-                                <th>Owner</th>
-                                <th>Ownership</th>
-                                <th>Status</th>
-                                <th>CPU</th>
-                                <th>Memory Usage</th>
-                                <th>Max Memory</th>
-                                <th>Disk</th>
-                                <th>Uptime</th>
-                                <th>Aksi</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            @forelse ($realVms as $vm)
-                                <tr>
-                                    <td><strong>{{ $vm['vmid'] }}</strong></td>
-                                    <td>{{ $vm['name'] }}</td>
-                                    <td>{{ $vm['node'] }}</td>
-                                    <td>
-                                        {{ $vm['owner_name'] ?? '-' }}
-                                        @if ($vm['owner_user_id'] && ! $vm['is_system_vm'])
-                                            <div class="muted">user_id={{ $vm['owner_user_id'] }}</div>
-                                        @endif
-                                    </td>
-                                    <td>
-                                        @if ($vm['ownership_status'] === 'system')
-                                            <span class="badge badge-deleted">Critical/System</span>
-                                        @elseif ($vm['ownership_status'] === 'owned')
-                                            <span class="badge badge-running">owned</span>
-                                        @else
-                                            <span class="badge badge-stopped">Belum diassign</span>
-                                        @endif
-                                        @if ($vm['is_critical'] && ! $vm['is_system_vm'])
-                                            <div class="muted">critical</div>
-                                        @endif
-                                    </td>
-                                    <td><span class="badge {{ $realStatusClass($vm['status']) }}">{{ $vm['status'] }}</span></td>
-                                    <td>{{ $vm['cpu'] }}</td>
-                                    <td>{{ $vm['memory_usage'] }}</td>
-                                    <td>{{ $vm['max_memory'] }}</td>
-                                    <td>{{ $vm['disk'] }}</td>
-                                    <td>{{ $vm['uptime'] }}</td>
-                                    <td>
-                                        <div class="actions">
-                                            <form method="POST" action="{{ route('dashboard.proxmox.vms.action', [$vm['node'], $vm['vmid'], 'start']) }}">
-                                                @csrf
-                                                <button class="btn btn-soft" type="submit" @disabled(! $vm['can_control'] || $vm['status'] === 'running')>Start</button>
-                                            </form>
-                                            <form method="POST" action="{{ route('dashboard.proxmox.vms.action', [$vm['node'], $vm['vmid'], 'stop']) }}">
-                                                @csrf
-                                                <button class="btn btn-danger" type="submit" @disabled(! $vm['can_control'] || $vm['status'] !== 'running')>Stop</button>
-                                            </form>
-                                            <form method="POST" action="{{ route('dashboard.proxmox.vms.action', [$vm['node'], $vm['vmid'], 'shutdown']) }}">
-                                                @csrf
-                                                <button class="btn btn-soft" type="submit" @disabled(! $vm['can_control'] || $vm['status'] !== 'running')>Shutdown</button>
-                                            </form>
-                                            @if ($vm['local_vm_id'])
-                                                <form method="POST" action="{{ route('terminal-sessions.store', $vm['local_vm_id']) }}">
-                                                    @csrf
-                                                    <button class="btn btn-primary" type="submit" @disabled(! $vm['can_control'])>Access Terminal</button>
-                                                </form>
-                                            @else
-                                                <button class="btn btn-soft" type="button" disabled>Access Terminal</button>
-                                            @endif
-                                        </div>
-                                    </td>
-                                </tr>
-                            @empty
-                                <tr>
-                                    <td colspan="12" class="muted">Belum ada VM real yang bisa ditampilkan dari Proxmox.</td>
-                                </tr>
-                            @endforelse
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <section class="card section">
-                    <div class="section-head">
-                        <div>
-                            <h2 class="section-title">VM Lokal Demo</h2>
-                            <div class="section-note">Data lokal untuk simulasi ownership, quota, RBAC, dan audit lama.</div>
-                        </div>
-                    </div>
-                    <div class="table-wrap">
-                        <table>
-                            <thead>
-                            <tr>
-                                <th>VM</th>
-                                <th>Owner</th>
-                                <th>Template</th>
-                                <th>CPU</th>
-                                <th>RAM</th>
-                                <th>Disk</th>
-                                <th>Status</th>
-                                <th>Aksi</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            @forelse ($vms as $vm)
-                                @php
-                                    $isCriticalVm = filter_var($vm->metadata['critical'] ?? false, FILTER_VALIDATE_BOOLEAN);
-                                    $isSystemVm = filter_var($vm->metadata['system_vm'] ?? false, FILTER_VALIDATE_BOOLEAN);
-                                    $isProtectedVm = $isCriticalVm || $isSystemVm;
-                                    $terminalBlocked = $vm->trashed() || $isProtectedVm;
-                                @endphp
-                                <tr>
-                                    <td><strong>{{ $vm->name }}</strong><div class="muted">{{ $vm->proxmox_id }}</div></td>
-                                    <td>
-                                        {{ $isSystemVm ? 'System VM' : ($vm->user?->name ?? '-') }}
-                                        @if (! $isSystemVm)
-                                            <div class="muted">owner_id={{ $vm->user_id }}</div>
-                                        @endif
-                                    </td>
-                                    <td>{{ $vm->labTemplate?->name ?? 'Lab Pribadi' }}</td>
-                                    <td>{{ $vm->cpu_cores }} core</td>
-                                    <td>{{ $vm->memory_mb }} MB</td>
-                                    <td>{{ $vm->disk_gb }} GB</td>
-                                    <td>
-                                        <span class="badge {{ $statusClass($vm) }}">{{ $statusLabel($vm) }}</span>
-                                        @if ($isSystemVm)
-                                            <div><span class="badge badge-deleted">System VM</span></div>
-                                        @elseif ($isCriticalVm)
-                                            <div><span class="badge badge-deleted">Critical</span></div>
-                                        @endif
-                                    </td>
-                                    <td>
-                                        <div class="actions">
-                                            <form method="POST" action="{{ route('dashboard.simulate.vm.resources', $vm) }}">
-                                                @csrf
-                                                <button class="btn btn-soft" type="submit" @disabled($vm->trashed() || $isProtectedVm)>Edit resource VM</button>
-                                            </form>
-                                            <form method="POST" action="{{ route('dashboard.simulate.vm.delete', $vm) }}">
-                                                @csrf
-                                                @method('DELETE')
-                                                <button class="btn btn-danger" type="submit" @disabled($vm->trashed() || $isProtectedVm)>Soft delete VM</button>
-                                            </form>
-                                            <form method="POST" action="{{ route('terminal-sessions.store', $vm) }}">
-                                                @csrf
-                                                <button class="btn btn-primary" type="submit" @disabled($terminalBlocked)>Access Terminal</button>
-                                            </form>
-                                        </div>
-                                    </td>
-                                </tr>
-                            @empty
-                                <tr>
-                                    <td colspan="8" class="muted">Belum ada VM lokal. Gunakan tombol Create Docker Lab untuk owner_id=3.</td>
-                                </tr>
-                            @endforelse
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-            @endif
-
-            @if (in_array($section, ['overview', 'audit-logs'], true))
-                <section class="card section">
-                    <div class="section-head">
-                        <div>
-                            <h2 class="section-title">Audit Log</h2>
-                            <div class="section-note">Aktivitas penting dari API dan dashboard mock.</div>
-                        </div>
-                    </div>
-                    <div class="table-wrap">
-                        <table>
-                            <thead>
-                            <tr>
-                                <th>User</th>
-                                <th>Action</th>
-                                <th>Description</th>
-                                <th>VM</th>
-                                <th>Created At</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            @forelse ($auditLogs as $log)
-                                <tr>
-                                    <td>{{ $log->user?->name ?? '-' }}<div class="muted">{{ $log->user?->email ?? '' }}</div></td>
-                                    <td><span class="badge badge-other">{{ $log->action }}</span></td>
-                                    <td>{{ $log->description }}</td>
-                                    <td>{{ $log->vm?->name ?? '-' }}</td>
-                                    <td>{{ $log->created_at?->format('Y-m-d H:i') }}</td>
-                                </tr>
-                            @empty
-                                <tr>
-                                    <td colspan="5" class="muted">Belum ada audit log.</td>
-                                </tr>
-                            @endforelse
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-            @endif
         </div>
-    </main>
-</div>
-</body>
-</html>
+
+        @if (! ($realVmResponse['success'] ?? false))
+            <div class="mb-6 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+                Proxmox API gagal dibaca: {{ $realVmResponse['message'] ?? 'Unknown error' }}
+            </div>
+        @endif
+
+        <x-card class="mb-8">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-100">
+                    <thead>
+                        <tr class="bg-slate-50/50">
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">VMID</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Name</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Node</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Owner</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Ownership</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">CPU</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Memory</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Disk</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Uptime</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Aksi</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        @forelse ($realVms as $vm)
+                            <tr class="hover:bg-slate-50/50 transition-colors">
+                                <td class="px-6 py-4 text-sm font-medium text-slate-900">{{ $vm['vmid'] }}</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm['name'] }}</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm['node'] }}</td>
+                                <td class="px-6 py-4 text-sm">
+                                    {{ $vm['owner_name'] ?? '-' }}
+                                    @if ($vm['owner_user_id'] && ! $vm['is_system_vm'])
+                                        <p class="text-xs text-slate-400">user_id={{ $vm['owner_user_id'] }}</p>
+                                    @endif
+                                </td>
+                                <td class="px-6 py-4">
+                                    @if ($vm['ownership_status'] === 'system')
+                                        <x-badge type="system">Critical/System</x-badge>
+                                    @elseif ($vm['ownership_status'] === 'owned')
+                                        <x-badge type="owned">owned</x-badge>
+                                    @else
+                                        <x-badge type="unassigned">Belum diassign</x-badge>
+                                    @endif
+                                    @if ($vm['is_critical'] && ! $vm['is_system_vm'])
+                                        <p class="text-xs text-red-500 mt-1">critical</p>
+                                    @endif
+                                </td>
+                                <td class="px-6 py-4">
+                                    <x-badge :type="$realStatusClass($vm['status'])">{{ $vm['status'] }}</x-badge>
+                                </td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm['cpu'] }}</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">
+                                    <span class="block">{{ $vm['memory_usage'] }}</span>
+                                    <span class="text-xs text-slate-400">{{ $vm['max_memory'] }}</span>
+                                </td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm['disk'] }}</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm['uptime'] }}</td>
+                                <td class="px-6 py-4">
+                                    <div class="flex flex-wrap gap-2">
+                                        <form method="POST" action="{{ route('dashboard.proxmox.vms.action', [$vm['node'], $vm['vmid'], 'start']) }}">
+                                            @csrf
+                                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $vm['can_control'] || $vm['status'] === 'running')>Start</button>
+                                        </form>
+                                        <form method="POST" action="{{ route('dashboard.proxmox.vms.action', [$vm['node'], $vm['vmid'], 'stop']) }}">
+                                            @csrf
+                                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-inset ring-red-200 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $vm['can_control'] || $vm['status'] !== 'running')>Stop</button>
+                                        </form>
+                                        <form method="POST" action="{{ route('dashboard.proxmox.vms.action', [$vm['node'], $vm['vmid'], 'shutdown']) }}">
+                                            @csrf
+                                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-200 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $vm['can_control'] || $vm['status'] !== 'running')>Shutdown</button>
+                                        </form>
+                                        @if ($vm['local_vm_id'])
+                                            <form method="POST" action="{{ route('terminal-sessions.store', $vm['local_vm_id']) }}">
+                                                @csrf
+                                                <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $vm['can_control'])>Terminal</button>
+                                            </form>
+                                        @else
+                                            <button type="button" disabled class="inline-flex items-center justify-center rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400 cursor-not-allowed">Terminal</button>
+                                        @endif
+                                    </div>
+                                </td>
+                            </tr>
+                        @empty
+                            <tr>
+                                <td colspan="11" class="px-6 py-8 text-center text-sm text-slate-500">Belum ada VM real yang bisa ditampilkan dari Proxmox.</td>
+                            </tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+        </x-card>
+
+        <x-card title="VM Lokal Demo" subtitle="Data lokal untuk simulasi ownership, quota, RBAC, dan audit lama." class="mb-8">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-100">
+                    <thead>
+                        <tr class="bg-slate-50/50">
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">VM</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Owner</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Template</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">CPU</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">RAM</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Disk</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Aksi</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        @forelse ($vms as $vm)
+                            @php
+                                $isCriticalVm = filter_var($vm->metadata['critical'] ?? false, FILTER_VALIDATE_BOOLEAN);
+                                $isSystemVm = filter_var($vm->metadata['system_vm'] ?? false, FILTER_VALIDATE_BOOLEAN);
+                                $isProtectedVm = $isCriticalVm || $isSystemVm;
+                                $terminalBlocked = $vm->trashed() || $isProtectedVm;
+                            @endphp
+                            <tr class="hover:bg-slate-50/50 transition-colors">
+                                <td class="px-6 py-4 text-sm">
+                                    <span class="font-medium text-slate-900">{{ $vm->name }}</span>
+                                    <p class="text-xs text-slate-400">{{ $vm->proxmox_id }}</p>
+                                </td>
+                                <td class="px-6 py-4 text-sm">
+                                    {{ $isSystemVm ? 'System VM' : ($vm->user?->name ?? '-') }}
+                                    @if (! $isSystemVm)
+                                        <p class="text-xs text-slate-400">owner_id={{ $vm->user_id }}</p>
+                                    @endif
+                                </td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->labTemplate?->name ?? 'Lab Pribadi' }}</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->cpu_cores }} core</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->memory_mb }} MB</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->disk_gb }} GB</td>
+                                <td class="px-6 py-4">
+                                    <x-badge :type="$statusClass($vm)">{{ $statusLabel($vm) }}</x-badge>
+                                    @if ($isSystemVm)
+                                        <div class="mt-1"><x-badge type="system">System VM</x-badge></div>
+                                    @elseif ($isCriticalVm)
+                                        <div class="mt-1"><x-badge type="critical">Critical</x-badge></div>
+                                    @endif
+                                </td>
+                                <td class="px-6 py-4">
+                                    <div class="flex flex-wrap gap-2">
+                                        <form method="POST" action="{{ route('dashboard.simulate.vm.resources', $vm) }}">
+                                            @csrf
+                                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled($vm->trashed() || $isProtectedVm)>Edit Resource</button>
+                                        </form>
+                                        <form method="POST" action="{{ route('dashboard.simulate.vm.delete', $vm) }}">
+                                            @csrf
+                                            @method('DELETE')
+                                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-inset ring-red-200 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled($vm->trashed() || $isProtectedVm)>Soft Delete</button>
+                                        </form>
+                                        <form method="POST" action="{{ route('terminal-sessions.store', $vm) }}">
+                                            @csrf
+                                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed" @disabled($terminalBlocked)>Terminal</button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                        @empty
+                            <tr>
+                                <td colspan="8" class="px-6 py-8 text-center text-sm text-slate-500">Belum ada VM lokal. Gunakan tombol Create Docker Lab.</td>
+                            </tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+        </x-card>
+    @endif
+
+    @if (in_array($section, ['overview', 'audit-logs'], true))
+        @if ($canViewPamMonitoring)
+            <x-card title="SOC PAM Monitoring" subtitle="Terminal sessions and command activity for practical VM access." class="mb-6">
+                <div class="p-0"></div>
+            </x-card>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                <x-card title="Recent Command Logs" subtitle="Latest command executions across terminal sessions.">
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-slate-100">
+                            <thead>
+                                <tr class="bg-slate-50/50">
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">User</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">VM / Session</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Command</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Executed</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Output</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                @forelse ($recentCommandLogs as $commandLog)
+                                    <tr class="hover:bg-slate-50/50 transition-colors">
+                                        <td class="px-4 py-3.5 text-sm">
+                                            <span class="font-medium text-slate-900">{{ $commandLog['user_name'] }}</span>
+                                            <p class="text-xs text-slate-400">{{ $commandLog['user_email'] }}</p>
+                                        </td>
+                                        <td class="px-4 py-3.5 text-sm">
+                                            {{ $commandLog['vm_name'] }}
+                                            <p class="text-xs text-slate-400">session {{ $shortSession($commandLog['session_uuid']) }}</p>
+                                        </td>
+                                        <td class="px-4 py-3.5"><code class="text-xs font-mono bg-slate-100 px-2 py-1 rounded text-slate-700">{{ $commandLog['command'] }}</code></td>
+                                        <td class="px-4 py-3.5"><x-badge :type="$commandLog['status_class']">{{ $commandLog['status'] }}</x-badge></td>
+                                        <td class="px-4 py-3.5 text-xs text-slate-500">{{ $commandLog['executed_at']?->format('Y-m-d H:i:s') ?? '-' }}</td>
+                                        <td class="px-4 py-3.5 text-xs font-mono text-slate-600 max-w-[200px] truncate">
+                                            @if ($commandLog['output_excerpt'])
+                                                {{ $commandLog['output_excerpt'] }}
+                                            @else
+                                                <span class="text-slate-400">-</span>
+                                            @endif
+                                        </td>
+                                    </tr>
+                                @empty
+                                    <tr>
+                                        <td colspan="6" class="px-4 py-6 text-center text-sm text-slate-500">Belum ada command log.</td>
+                                    </tr>
+                                @endforelse
+                            </tbody>
+                        </table>
+                    </div>
+                </x-card>
+
+                <x-card title="Active Terminal Sessions" subtitle="Currently active PAM terminal sessions.">
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-slate-100">
+                            <thead>
+                                <tr class="bg-slate-50/50">
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">User</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">VM / Session</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">SSH</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Started</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                @forelse ($activeTerminalSessions as $session)
+                                    @php
+                                        $sessionTarget = ($session['ssh_username'] ?: 'student') . '@' . ($session['ssh_host'] ?: '-') . ':' . ($session['ssh_port'] ?: 22);
+                                    @endphp
+                                    <tr class="hover:bg-slate-50/50 transition-colors">
+                                        <td class="px-4 py-3.5 text-sm">
+                                            <span class="font-medium text-slate-900">{{ $session['user_name'] }}</span>
+                                            <p class="text-xs text-slate-400">{{ $session['user_email'] }}</p>
+                                        </td>
+                                        <td class="px-4 py-3.5 text-sm">
+                                            {{ $session['vm_name'] }}
+                                            <p class="text-xs text-slate-400">session {{ $shortSession($session['session_uuid']) }}</p>
+                                        </td>
+                                        <td class="px-4 py-3.5 text-xs font-mono text-slate-600">{{ $sessionTarget }}</td>
+                                        <td class="px-4 py-3.5"><x-badge :type="$session['status_class']">{{ $session['status'] }}</x-badge></td>
+                                        <td class="px-4 py-3.5 text-xs text-slate-500">{{ $session['started_at']?->format('Y-m-d H:i:s') ?? '-' }}</td>
+                                    </tr>
+                                @empty
+                                    <tr>
+                                        <td colspan="5" class="px-4 py-6 text-center text-sm text-slate-500">Tidak ada terminal session aktif.</td>
+                                    </tr>
+                                @endforelse
+                            </tbody>
+                        </table>
+                    </div>
+                </x-card>
+
+                <x-card title="Blocked Command Monitoring" subtitle="Restricted commands blocked by terminal policy." :danger="true">
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-red-100">
+                            <thead>
+                                <tr class="bg-red-50/50">
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-red-700">User</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-red-700">VM / Session</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-red-700">Command</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-red-700">Reason</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-red-700">Timestamp</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-red-100">
+                                @forelse ($blockedCommandLogs as $commandLog)
+                                    <tr class="hover:bg-red-50/30 transition-colors">
+                                        <td class="px-4 py-3.5 text-sm">
+                                            <span class="font-medium text-slate-900">{{ $commandLog['user_name'] }}</span>
+                                            <p class="text-xs text-slate-400">{{ $commandLog['user_email'] }}</p>
+                                        </td>
+                                        <td class="px-4 py-3.5 text-sm">
+                                            {{ $commandLog['vm_name'] }}
+                                            <p class="text-xs text-slate-400">session {{ $shortSession($commandLog['session_uuid']) }}</p>
+                                        </td>
+                                        <td class="px-4 py-3.5"><code class="text-xs font-mono bg-red-50 text-red-700 px-2 py-1 rounded">{{ $commandLog['command'] }}</code></td>
+                                        <td class="px-4 py-3.5 text-xs text-red-600">{{ $commandLog['blocked_reason'] ?? 'Command diblokir oleh policy terminal.' }}</td>
+                                        <td class="px-4 py-3.5 text-xs text-slate-500">{{ $commandLog['executed_at']?->format('Y-m-d H:i:s') ?? '-' }}</td>
+                                    </tr>
+                                @empty
+                                    <tr>
+                                        <td colspan="5" class="px-4 py-6 text-center text-sm text-slate-500">Tidak ada command yang diblokir.</td>
+                                    </tr>
+                                @endforelse
+                            </tbody>
+                        </table>
+                    </div>
+                </x-card>
+
+                <x-card title="Terminal Activity Timeline" subtitle="Recent session and command activity.">
+                    <div class="divide-y divide-slate-100">
+                        @forelse ($terminalActivityTimeline as $item)
+                            <div class="px-6 py-4 grid grid-cols-[auto,1fr] gap-4 items-start">
+                                <div class="text-xs text-slate-400 whitespace-nowrap pt-0.5">{{ $item['occurred_at']?->format('Y-m-d H:i:s') }}</div>
+                                <div>
+                                    <x-badge :type="str_replace('badge-', '', $item['style'])">{{ $item['label'] }}</x-badge>
+                                    <p class="mt-1.5 text-sm text-slate-900">
+                                        <span class="font-medium">{{ $item['user_name'] }}</span>
+                                        <span class="text-slate-400">· {{ $item['vm_name'] }}</span>
+                                    </p>
+                                    <p class="mt-0.5 text-xs font-mono text-slate-600">{{ $item['description'] }}</p>
+                                    <p class="mt-0.5 text-xs text-slate-400">session {{ $shortSession($item['session_uuid']) }}</p>
+                                </div>
+                            </div>
+                        @empty
+                            <x-empty-state message="Belum ada aktivitas terminal." class="py-8" />
+                        @endforelse
+                    </div>
+                </x-card>
+            </div>
+        @endif
+
+        <x-card class="{{ $section === 'audit-logs' ? 'mb-0' : '' }}">
+            <div class="border-b border-slate-100 px-6 py-5">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <h2 class="text-base font-semibold text-slate-950">Audit Log</h2>
+                        <p class="mt-1 text-sm text-slate-500">Aktivitas penting dari API dan dashboard mock.</p>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                        <span class="font-semibold text-slate-900">{{ $auditLogs->count() }}</span> latest entries
+                    </div>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-100">
+                    <thead class="bg-slate-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">User</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Action</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Description</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">VM</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Created At</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        @forelse ($auditLogs as $log)
+                            <tr class="bg-white transition hover:bg-slate-50">
+                                <td class="whitespace-nowrap px-6 py-4 text-sm">
+                                    <span class="font-semibold text-slate-900">{{ $log->user?->name ?? '-' }}</span>
+                                    @if ($log->user?->email)
+                                        <p class="mt-0.5 text-xs text-slate-500">{{ $log->user->email }}</p>
+                                    @endif
+                                </td>
+                                <td class="px-6 py-4">
+                                    <x-badge type="allowed">{{ $log->action }}</x-badge>
+                                </td>
+                                <td class="max-w-xl px-6 py-4 text-sm leading-6 text-slate-700">
+                                    {{ $log->description }}
+                                </td>
+                                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600">
+                                    {{ $log->vm?->name ?? '-' }}
+                                </td>
+                                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500">
+                                    {{ $log->created_at?->format('Y-m-d H:i') }}
+                                </td>
+                            </tr>
+                        @empty
+                            <tr>
+                                <td colspan="5" class="px-6 py-8 text-center text-sm text-slate-500">Belum ada audit log.</td>
+                            </tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+        </x-card>
+    @endif
+</x-layouts.app>

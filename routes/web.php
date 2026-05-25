@@ -13,6 +13,7 @@ Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard
 Route::get('/dashboard/templates', [DashboardController::class, 'templates'])->name('dashboard.templates');
 Route::get('/dashboard/vms', [DashboardController::class, 'vms'])->name('dashboard.vms');
 Route::get('/dashboard/audit-logs', [DashboardController::class, 'auditLogs'])->name('dashboard.audit-logs');
+Route::get('/dashboard/soc', [DashboardController::class, 'socMonitoring'])->name('dashboard.soc');
 
 Route::post('/dashboard/simulate/docker-lab', [DashboardController::class, 'createDockerLab'])->name('dashboard.simulate.docker-lab');
 Route::post('/dashboard/simulate/vms/{vm}/resources', [DashboardController::class, 'editVmResource'])->name('dashboard.simulate.vm.resources');
@@ -29,6 +30,8 @@ Route::get('/terminal-sessions/{terminalSession}', [TerminalSessionController::c
     ->name('terminal-sessions.show');
 Route::post('/terminal-sessions/{terminalSession}/commands', [TerminalSessionController::class, 'executeCommand'])
     ->name('terminal-sessions.commands.store');
+Route::post('/terminal-sessions/{terminalSession}/revoke', [TerminalSessionController::class, 'revoke'])
+    ->name('terminal-sessions.revoke');
 Route::delete('/terminal-sessions/{terminalSession}', [TerminalSessionController::class, 'destroy'])
     ->name('terminal-sessions.destroy');
 

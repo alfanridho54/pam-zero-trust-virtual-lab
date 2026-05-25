@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\CommandLogStatus;
 use App\Enums\TerminalSessionStatus;
+use App\Models\AuditLog;
 use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
@@ -168,6 +169,85 @@ class TerminalCommandExecutionTest extends TestCase
         ]);
     }
 
+    public function test_admin_can_revoke_active_terminal_session(): void
+    {
+        $admin = $this->admin();
+        $student = $this->student();
+        $terminalSession = $this->terminalSessionFor($student, [], [
+            'status' => TerminalSessionStatus::Active,
+            'last_activity_at' => now()->subMinutes(10),
+        ]);
+
+        $this->actingAs($admin)
+            ->post(route('terminal-sessions.revoke', $terminalSession))
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $terminalSession->refresh();
+
+        $this->assertSame(TerminalSessionStatus::Revoked, $terminalSession->status);
+        $this->assertNotNull($terminalSession->ended_at);
+        $this->assertTrue($terminalSession->last_activity_at->greaterThan(now()->subMinute()));
+        $this->assertDatabaseHas('audit_logs', [
+            'user_id' => $admin->id,
+            'vm_id' => $terminalSession->vm_id,
+            'action' => 'terminal_session.revoked',
+        ]);
+
+        $auditLog = AuditLog::where('action', 'terminal_session.revoked')->firstOrFail();
+
+        $this->assertSame($terminalSession->id, $auditLog->metadata['terminal_session_id']);
+        $this->assertSame($student->id, $auditLog->metadata['target_user_id']);
+    }
+
+    public function test_student_cannot_revoke_terminal_session(): void
+    {
+        $student = $this->student();
+        $terminalSession = $this->terminalSessionFor($student, [], [
+            'status' => TerminalSessionStatus::Active,
+        ]);
+
+        $this->actingAs($student)
+            ->post(route('terminal-sessions.revoke', $terminalSession))
+            ->assertForbidden();
+
+        $terminalSession->refresh();
+
+        $this->assertSame(TerminalSessionStatus::Active, $terminalSession->status);
+        $this->assertNull($terminalSession->ended_at);
+    }
+
+    public function test_revoked_session_after_admin_revoke_cannot_execute_commands(): void
+    {
+        $admin = $this->admin();
+        $student = $this->student();
+        $terminalSession = $this->terminalSessionFor($student, [], [
+            'status' => TerminalSessionStatus::Active,
+        ]);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                throw new \RuntimeException('SSH should not be called for revoked sessions.');
+            }
+        });
+
+        $this->actingAs($admin)
+            ->post(route('terminal-sessions.revoke', $terminalSession))
+            ->assertRedirect();
+
+        $this->actingAs($student)
+            ->post(route('terminal-sessions.commands.store', $terminalSession))
+            ->assertRedirect()
+            ->assertSessionHas('error');
+
+        $this->assertDatabaseHas('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'status' => CommandLogStatus::Blocked->value,
+        ]);
+    }
+
     public function test_show_page_expires_past_due_session_and_warns_when_near_expiry(): void
     {
         $user = $this->student();
@@ -199,6 +279,13 @@ class TerminalCommandExecutionTest extends TestCase
     {
         return User::factory()->create([
             'role' => 'student',
+        ]);
+    }
+
+    private function admin(): User
+    {
+        return User::factory()->create([
+            'role' => 'admin',
         ]);
     }
 
