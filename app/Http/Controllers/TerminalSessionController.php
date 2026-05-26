@@ -23,6 +23,10 @@ class TerminalSessionController extends Controller
     private const DEFAULT_TEST_COMMAND = 'whoami && hostname && uptime';
     private const OUTPUT_EXCERPT_LIMIT = 4000;
 
+    /**
+     * Membuka lifecycle sesi PAM untuk VM yang sudah lolos policy ownership.
+     * Sesi dibuat sebagai pending agar akses SSH baru aktif saat command pertama dijalankan.
+     */
     public function store(Request $request, Vm $vm): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
@@ -76,6 +80,7 @@ class TerminalSessionController extends Controller
         Gate::forUser($user)->authorize('view', $terminalSession);
 
         $terminalSession->load(['user', 'vm']);
+        // Pastikan sesi yang melewati TTL tidak lagi mendapat tiket terminal baru.
         $terminalSession->expireIfPastDue();
         $commandLogs = $terminalSession->commandLogs()
             ->recent()
@@ -100,6 +105,7 @@ class TerminalSessionController extends Controller
 
         Gate::forUser($user)->authorize('view', $terminalSession);
 
+        // Cegah sesi revoked/expired tetap mengeksekusi command melalui request lama.
         $terminalSession->expireIfPastDue();
 
         $command = trim((string) $request->input('command', self::DEFAULT_TEST_COMMAND));
@@ -116,6 +122,7 @@ class TerminalSessionController extends Controller
         $authorization = Gate::forUser($user)->inspect('execute', [CommandLog::class, $terminalSession, $command]);
 
         if ($authorization->denied()) {
+            // Command yang ditolak tetap dicatat agar SOC dapat melihat percobaan pelanggaran policy.
             $commandLog = $this->createCommandLog($terminalSession, $user, $command);
             $commandLog->markBlocked($authorization->message() ?: CommandLog::blockedReasonFor($command));
             $this->touchActivityWhenOpen($terminalSession);
@@ -126,6 +133,7 @@ class TerminalSessionController extends Controller
         $commandLog = $this->createCommandLog($terminalSession, $user, $command);
 
         if ($terminalSession->isPending()) {
+            // Aktivasi dilakukan saat command pertama valid untuk menandai sesi benar-benar dipakai.
             $terminalSession->forceFill([
                 'status' => TerminalSessionStatus::Active,
                 'metadata' => [
@@ -137,6 +145,7 @@ class TerminalSessionController extends Controller
         }
 
         try {
+            // Eksekusi SSH selalu melewati service agar logging dan sanitasi output tetap konsisten.
             $result = $sshCommandService->execute($terminalSession, $command);
             $outputExcerpt = $this->outputExcerpt($result->output ?: $result->error ?: 'SSH command execution failed.');
 
@@ -186,6 +195,7 @@ class TerminalSessionController extends Controller
 
         $revokedAt = now();
 
+        // Revoke adalah penghentian paksa oleh admin; timestamp disamakan untuk jejak audit yang jelas.
         $terminalSession->forceFill([
             'status' => TerminalSessionStatus::Revoked,
             'ended_at' => $revokedAt,
@@ -217,6 +227,7 @@ class TerminalSessionController extends Controller
             return null;
         }
 
+        // Ticket terenkripsi membatasi WebSocket ke pasangan user-session dan umur pakai yang pendek.
         return Crypt::encryptString(json_encode([
             'session_uuid' => $terminalSession->session_uuid,
             'user_id' => $user->id,
@@ -283,6 +294,7 @@ class TerminalSessionController extends Controller
 
     private function audit(User $user, ?Vm $vm, string $action, string $description, array $metadata = []): void
     {
+        // Semua aksi terminal masuk audit log agar alur PAM dapat ditelusuri saat monitoring/forensik.
         AuditLog::create([
             'user_id' => $user->id,
             'vm_id' => $vm?->id,
@@ -294,6 +306,7 @@ class TerminalSessionController extends Controller
 
     private function createCommandLog(TerminalSession $terminalSession, User $user, string $command): CommandLog
     {
+        // Command dicatat sebelum hasil akhir diketahui, lalu statusnya dinaikkan ke succeeded/failed/blocked.
         return CommandLog::create([
             'terminal_session_id' => $terminalSession->id,
             'user_id' => $user->id,
@@ -317,6 +330,7 @@ class TerminalSessionController extends Controller
             ->toString();
 
         if (is_string($password) && $password !== '') {
+            // Jangan pernah menampilkan secret SSH pada dashboard SOC atau riwayat command.
             $excerpt = str_replace($password, '[redacted]', $excerpt);
         }
 

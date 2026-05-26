@@ -13,7 +13,7 @@ class VmPolicy
      */
     public function viewAny(User $user): bool
     {
-        return false;
+        return in_array($this->roleFor($user), ['admin', 'guru', 'student'], true);
     }
 
     /**
@@ -21,7 +21,7 @@ class VmPolicy
      */
     public function view(User $user, Vm $vm): bool
     {
-        return false;
+        return $this->canSupervise($user) || $vm->user_id === $user->id;
     }
 
     /**
@@ -29,7 +29,7 @@ class VmPolicy
      */
     public function create(User $user): bool
     {
-        return false;
+        return $this->roleFor($user) === 'student' || $this->canSupervise($user);
     }
 
     /**
@@ -37,7 +37,7 @@ class VmPolicy
      */
     public function update(User $user, Vm $vm): bool
     {
-        return false;
+        return ! $vm->isProtectedVm() && ($this->canSupervise($user) || $vm->user_id === $user->id);
     }
 
     /**
@@ -45,7 +45,7 @@ class VmPolicy
      */
     public function delete(User $user, Vm $vm): bool
     {
-        return false;
+        return ! $vm->isProtectedVm() && ($this->canSupervise($user) || $vm->user_id === $user->id);
     }
 
     /**
@@ -62,5 +62,20 @@ class VmPolicy
     public function forceDelete(User $user, Vm $vm): bool
     {
         return false;
+    }
+
+    private function canSupervise(User $user): bool
+    {
+        return in_array($this->roleFor($user), ['admin', 'guru'], true);
+    }
+
+    private function roleFor(User $user): string
+    {
+        return match ($user->role) {
+            'admin' => 'admin',
+            'guru', 'teacher' => 'guru',
+            'student', 'mahasiswa' => 'student',
+            default => 'guest',
+        };
     }
 }

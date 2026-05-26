@@ -29,6 +29,7 @@ class AuditLog extends Model
 
     public function vm(): BelongsTo
     {
+        // Audit tetap dapat menunjuk VM yang sudah di-soft delete untuk kebutuhan forensik.
         return $this->belongsTo(Vm::class)->withTrashed();
     }
 }

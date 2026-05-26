@@ -30,12 +30,14 @@ class TerminalWebSocketCommandService
 
         $terminalSession->refresh();
         $terminalSession->load('vm');
+        // Refresh status sebelum eksekusi agar revoke/expire dari dashboard langsung berlaku di WebSocket.
         $terminalSession->expireIfPastDue();
 
         if (mb_strlen($command) > self::MAX_COMMAND_LENGTH) {
             return $this->blocked($terminalSession, $user, $command, 'Command terlalu panjang untuk interactive terminal.');
         }
 
+        // Policy command menjadi gerbang terakhir sebelum input user diteruskan ke SSH.
         $authorization = Gate::forUser($user)->inspect('execute', [CommandLog::class, $terminalSession, $command]);
 
         if ($authorization->denied()) {
@@ -48,6 +50,7 @@ class TerminalWebSocketCommandService
         }
 
         if ($terminalSession->isPending()) {
+            // Sesi terminal dianggap aktif hanya setelah command pertama yang lolos policy.
             $terminalSession->forceFill([
                 'status' => TerminalSessionStatus::Active,
                 'metadata' => [
@@ -61,6 +64,7 @@ class TerminalWebSocketCommandService
         $commandLog = $this->createCommandLog($terminalSession, $user, $command);
 
         try {
+            // WebSocket hanya transport; eksekusi tetap lewat SSH service agar audit flow seragam.
             $result = $this->sshCommandService->execute($terminalSession, $command);
             $outputExcerpt = $this->outputExcerpt($result->output ?: $result->error ?: 'SSH command execution failed.');
 
@@ -84,6 +88,7 @@ class TerminalWebSocketCommandService
 
     private function blocked(TerminalSession $terminalSession, User $user, string $command, string $reason): TerminalWebSocketCommandResult
     {
+        // Percobaan command berbahaya tetap disimpan sebagai sinyal monitoring, bukan dibuang diam-diam.
         $commandLog = $this->createCommandLog($terminalSession, $user, $command);
         $commandLog->markBlocked($reason);
 
@@ -101,6 +106,7 @@ class TerminalWebSocketCommandService
 
     private function createCommandLog(TerminalSession $terminalSession, User $user, string $command): CommandLog
     {
+        // Sumber websocket dibedakan supaya SOC dapat membedakan terminal interaktif dari form POC.
         return CommandLog::create([
             'terminal_session_id' => $terminalSession->id,
             'user_id' => $user->id,
@@ -118,6 +124,7 @@ class TerminalWebSocketCommandService
         $excerpt = str($output)->replace("\0", '')->limit(self::OUTPUT_EXCERPT_LIMIT, "\n[output truncated]")->toString();
 
         if (is_string($password) && $password !== '') {
+            // Redaksi secret menjaga output terminal aman saat ditampilkan di dashboard.
             $excerpt = str_replace($password, '[redacted]', $excerpt);
         }
 

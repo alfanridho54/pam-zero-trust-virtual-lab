@@ -30,6 +30,7 @@ class CommandLogPolicy
         }
 
         if ($this->protectedVm($terminalSession)) {
+            // Pertahanan berlapis: command tetap diblokir walau ada session pada VM protected.
             return Response::deny('Command diblokir untuk VM system atau protected.');
         }
 
@@ -48,6 +49,7 @@ class CommandLogPolicy
     private function canAccessSession(User $user, TerminalSession $terminalSession): bool
     {
         if ($terminalSession->isEnded() || $terminalSession->isExpired()) {
+            // Session final tidak boleh dipakai lagi, termasuk oleh request/WebSocket lama.
             return false;
         }
 
@@ -64,6 +66,7 @@ class CommandLogPolicy
             return true;
         }
 
+        // Siswa harus menjadi pemilik session sekaligus pemilik VM target.
         return in_array($user->role, ['student', 'mahasiswa'], true)
             && $terminalSession->user_id === $user->id
             && $terminalSession->vm?->user_id === $user->id;
@@ -73,6 +76,7 @@ class CommandLogPolicy
     {
         $metadata = $terminalSession->vm?->metadata ?? [];
 
+        // Metadata VM menjadi saklar proteksi untuk aset system, critical, atau protected.
         foreach (['system_vm', 'critical', 'protected'] as $key) {
             if (filter_var($metadata[$key] ?? false, FILTER_VALIDATE_BOOLEAN)) {
                 return true;

@@ -24,6 +24,7 @@ class VmController extends Controller
             $user = $this->mockUser($request);
 
             if ($user->role === 'student') {
+                // API VM menjaga isolasi ownership: siswa hanya menerima VM miliknya.
                 $query->where('user_id', $user->id);
             }
         }
@@ -73,6 +74,7 @@ class VmController extends Controller
 
         $proxmox = $this->proxmox->createVm($data);
 
+        // Record lokal adalah sumber ownership; response Proxmox hanya menambahkan identitas infrastruktur.
         $vm = $user->vms()->create([
             ...$data,
             ...$proxmox,
@@ -89,6 +91,7 @@ class VmController extends Controller
     public function show(Request $request, Vm $vm): JsonResponse
     {
         $user = $this->mockUser($request);
+        // Semua operasi VM pribadi mengunci akses pada pemilik record lokal.
         abort_unless($vm->user_id === $user->id, 403);
 
         return response()->json(['data' => $vm->load('labTemplate')]);
@@ -143,6 +146,7 @@ class VmController extends Controller
 
     private function audit(int $userId, ?int $vmId, string $action, string $description, array $metadata = []): void
     {
+        // Setiap perubahan VM dicatat untuk menghubungkan aksi user dengan state Proxmox/lokal.
         AuditLog::create([
             'user_id' => $userId,
             'vm_id' => $vmId,

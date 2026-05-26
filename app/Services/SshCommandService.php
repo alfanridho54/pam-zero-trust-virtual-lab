@@ -9,6 +9,10 @@ use Throwable;
 
 class SshCommandService
 {
+    /**
+     * Menjalankan command melalui SSH target yang terikat pada TerminalSession.
+     * Service ini sengaja kecil agar semua transport memakai jalur eksekusi dan timeout yang sama.
+     */
     public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
     {
         $password = config('services.terminal.ssh_password');
@@ -18,6 +22,7 @@ class SshCommandService
         }
 
         $timeout = $timeoutSeconds ?? (int) config('services.terminal.command_timeout', 10);
+        // Timeout dibatasi supaya command gantung tidak menahan worker terminal terlalu lama.
         $timeout = max(1, min($timeout, 30));
         $started = hrtime(true);
 
@@ -33,6 +38,7 @@ class SshCommandService
                 return $this->failed($started, 'SSH authentication failed.');
             }
 
+            // Pada tahap ini policy sudah diperiksa oleh caller; service ini hanya melakukan eksekusi SSH.
             $output = $ssh->exec($command);
 
             if ($output === false) {

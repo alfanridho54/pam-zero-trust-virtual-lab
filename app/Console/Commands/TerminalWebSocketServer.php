@@ -18,6 +18,10 @@ class TerminalWebSocketServer extends Command
     /** @var array<int, array{socket: resource, session?: TerminalSession, user?: User, authed: bool}> */
     private array $clients = [];
 
+    /**
+     * Server WebSocket ringan untuk terminal interaktif PAM.
+     * Transport ini tidak mengeksekusi command langsung; semua command diteruskan ke service terpantau.
+     */
     public function handle(TerminalWebSocketCommandService $commandService): int
     {
         $host = (string) $this->option('host');
@@ -80,6 +84,7 @@ class TerminalWebSocketServer extends Command
             return;
         }
 
+        // Handshake minimal WebSocket; autentikasi PAM dilakukan setelah client mengirim ticket.
         $accept = base64_encode(sha1(trim($matches[1]).'258EAFA5-E914-47DA-95CA-C5AB0DC85B11', true));
         fwrite($socket, "HTTP/1.1 101 Switching Protocols\r\n");
         fwrite($socket, "Upgrade: websocket\r\n");
@@ -109,6 +114,7 @@ class TerminalWebSocketServer extends Command
         }
 
         if (($message['type'] ?? null) === 'auth') {
+            // Client harus membuktikan ticket sebelum command apa pun diterima.
             $this->authenticate($clientId, (string) ($message['ticket'] ?? ''));
 
             return;
@@ -147,6 +153,7 @@ class TerminalWebSocketServer extends Command
         }
 
         if (($payload['expires_at'] ?? 0) < now()->timestamp) {
+            // Ticket pendek mengurangi risiko reuse jika token WebSocket bocor dari browser.
             $this->sendClient($clientId, ['type' => 'error', 'message' => 'Terminal websocket ticket expired.']);
             $this->disconnect($clientId);
 
@@ -157,6 +164,7 @@ class TerminalWebSocketServer extends Command
         $user = User::find($payload['user_id'] ?? null);
 
         if (! $session || ! $user || ! $session->isOwnedBy($user)) {
+            // Ticket hanya valid untuk pemilik sesi; user lain tidak bisa menumpang session_uuid.
             $this->sendClient($clientId, ['type' => 'error', 'message' => 'Terminal websocket session denied.']);
             $this->disconnect($clientId);
 
@@ -166,6 +174,7 @@ class TerminalWebSocketServer extends Command
         $session->expireIfPastDue();
 
         if ($session->isEnded() || $session->isExpired()) {
+            // Revoke/expire dari dashboard langsung memutus terminal interaktif berikutnya.
             $this->sendClient($clientId, ['type' => 'error', 'message' => 'Terminal session is not active.']);
             $this->disconnect($clientId);
 
@@ -190,6 +199,7 @@ class TerminalWebSocketServer extends Command
         $user = $this->clients[$clientId]['user'];
 
         $this->sendClient($clientId, ['type' => 'running', 'command' => $command]);
+        // Forward command melalui service PAM agar policy, audit log, dan redaksi output tetap berjalan.
         $result = $commandService->run($session, $user, $command);
 
         if ($result->type !== 'ignored') {
@@ -217,6 +227,7 @@ class TerminalWebSocketServer extends Command
             $offset = 10;
         }
 
+        // Browser mengirim frame termask; payload dibuka di sini sebelum diproses sebagai JSON.
         $mask = substr($data, $offset, 4);
         $payload = substr($data, $offset + 4, $length);
         $decoded = '';

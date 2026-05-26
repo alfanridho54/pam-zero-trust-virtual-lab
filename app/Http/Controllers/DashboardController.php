@@ -46,6 +46,7 @@ class DashboardController extends Controller
     public function socMonitoring(Request $request): View
     {
         $user = $this->resolveDashboardUser($request);
+        // Dashboard SOC hanya untuk admin karena berisi aktivitas terminal lintas user.
         abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses ke SOC monitoring.');
 
         return $this->view('soc');
@@ -115,6 +116,7 @@ class DashboardController extends Controller
         $localVm = $this->findLocalVm($validated['node'], $vmid);
 
         if (! $this->canAccessRealVm($user, $localVm)) {
+            // VM Proxmox nyata harus cocok dengan record lokal agar ownership tetap terisolasi.
             $this->audit($user?->id, $localVm?->id, 'dashboard.proxmox.vm.denied', 'Akses VM ditolak karena ownership.', [
                 'node' => $validated['node'],
                 'vmid' => $vmid,
@@ -128,6 +130,7 @@ class DashboardController extends Controller
         }
 
         if ($this->isProtectedVm($validated['node'], $vmid, $localVm)) {
+            // VM critical/system dilindungi dari action lifecycle dashboard walau terlihat oleh admin.
             $this->audit($user?->id, $localVm?->id, 'dashboard.proxmox.vm.critical_blocked', 'Action ke VM kritikal diblokir.', [
                 'node' => $validated['node'],
                 'vmid' => $vmid,
@@ -149,6 +152,7 @@ class DashboardController extends Controller
             ? 'dashboard.proxmox.vm.'.$validated['action'].'.success'
             : 'dashboard.proxmox.vm.'.$validated['action'].'.failed';
 
+        // Setiap action Proxmox dicatat bersama hasil API untuk akuntabilitas operasional.
         $this->audit($user?->id, $localVm?->id, $auditAction, 'Dashboard menjalankan action VM real Proxmox.', [
             'node' => $validated['node'],
             'vmid' => $vmid,
@@ -179,6 +183,7 @@ class DashboardController extends Controller
             ->values();
         $canViewPamMonitoring = $this->roleFor($user) === 'admin';
 
+        // Data SOC dipasang hanya saat admin melihat dashboard agar telemetry PAM tidak bocor ke siswa.
         $data = [
             'section' => $section,
             'currentUser' => $user,
@@ -221,6 +226,7 @@ class DashboardController extends Controller
             ->with(['user', 'labTemplate'])
             ->latest();
 
+        // Isolasi VM lokal: siswa hanya melihat resource miliknya, admin/guru untuk supervisi.
         return match ($this->roleFor($user)) {
             'admin' => $query->get(),
             'guru' => $query->get(), // TODO: Batasi ke siswa bimbingan setelah relasi guru-siswa tersedia.
@@ -239,6 +245,7 @@ class DashboardController extends Controller
         $critical = $this->isCriticalVm($node, $vmid, $vm['name'] ?? null, $localVm);
         $protected = $systemVm || $critical;
 
+        // Gabungkan inventory Proxmox dengan ownership lokal sebelum menentukan view/control permission.
         return [
             'vmid' => $vmid,
             'name' => $vm['name'] ?? '-',
@@ -271,6 +278,7 @@ class DashboardController extends Controller
 
     private function activeTerminalSessions(): Collection
     {
+        // SOC menampilkan hanya sesi aktif yang belum melewati waktu kedaluwarsa.
         return TerminalSession::with(['user', 'vm'])
             ->active()
             ->where(fn ($query) => $query
@@ -284,6 +292,7 @@ class DashboardController extends Controller
 
     private function blockedCommandLogs(): Collection
     {
+        // Command blocked disorot karena menjadi indikator percobaan melanggar policy terminal.
         return CommandLog::with(['user', 'vm', 'terminalSession'])
             ->blocked()
             ->recent()
@@ -294,6 +303,7 @@ class DashboardController extends Controller
 
     private function terminalActivityTimeline(): Collection
     {
+        // Timeline menyatukan lifecycle sesi dan command agar investigator melihat urutan kejadian.
         $sessions = TerminalSession::with(['user', 'vm'])
             ->latest('started_at')
             ->limit(10)
@@ -425,6 +435,7 @@ class DashboardController extends Controller
         $sshPassword = config('services.terminal.ssh_password');
 
         if (is_string($sshPassword) && $sshPassword !== '') {
+            // Output SOC tidak boleh membocorkan password SSH yang mungkin ikut tercetak command.
             $excerpt = str_replace($sshPassword, '[redacted]', $excerpt);
         }
 
@@ -459,6 +470,7 @@ class DashboardController extends Controller
         }
 
         if ($role === 'student') {
+            // Siswa hanya bisa mengontrol VM Proxmox yang terikat ke record lokal miliknya.
             return $user !== null && $localVm !== null && $localVm->user_id === $user->id;
         }
 
@@ -500,12 +512,14 @@ class DashboardController extends Controller
 
     private function isProtectedVm(string $node, int $vmid, ?Vm $localVm): bool
     {
+        // Perlindungan VM memakai metadata lokal dan heuristic VM critical bawaan lab.
         return $this->metadataFlag($localVm, 'system_vm')
             || $this->isCriticalVm($node, $vmid, $localVm?->name, $localVm);
     }
 
     private function isCriticalVm(string $node, int $vmid, ?string $name = null, ?Vm $localVm = null): bool
     {
+        // Jump server dan VMID khusus dianggap aset infrastruktur, bukan VM praktikum biasa.
         return $vmid === 101
             || $this->metadataFlag($localVm, 'critical')
             || str($name ?? '')->lower()->contains('jump-server');
@@ -569,6 +583,7 @@ class DashboardController extends Controller
 
     private function audit(?int $userId, ?int $vmId, string $action, string $description, array $metadata = []): void
     {
+        // Audit dashboard menyimpan konteks user, VM, action, dan metadata untuk kebutuhan SOC.
         AuditLog::create([
             'user_id' => $userId,
             'vm_id' => $vmId,

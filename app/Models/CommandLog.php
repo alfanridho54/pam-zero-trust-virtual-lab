@@ -9,6 +9,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class CommandLog extends Model
 {
+    /**
+     * Daftar pola command yang berisiko merusak VM atau mengambil alih akun.
+     * Policy menggunakan daftar ini sebagai kontrol dasar untuk terminal praktikum.
+     */
     public const BLOCKED_COMMAND_PATTERNS = [
         '/\brm\s+-rf\s+(\/|\*)/i',
         '/\bmkfs(\.\w+)?\b/i',
@@ -144,6 +148,7 @@ class CommandLog extends Model
             return true;
         }
 
+        // Siswa hanya dapat melihat command miliknya pada sesi terminal miliknya.
         return in_array($user->role, ['student', 'mahasiswa'], true)
             && $this->isOwnedBy($user)
             && $this->terminalSession?->isOwnedBy($user);
@@ -171,6 +176,7 @@ class CommandLog extends Model
 
     public function markBlocked(?string $reason = null): bool
     {
+        // Status blocked dipisahkan dari failed karena command tidak pernah dikirim ke SSH.
         return $this->forceFill([
             'status' => CommandLogStatus::Blocked,
             'blocked_reason' => $reason ?? self::blockedReasonFor($this->command),
@@ -179,6 +185,7 @@ class CommandLog extends Model
 
     public static function blockedReasonFor(string $command): ?string
     {
+        // Pemeriksaan dibuat terpusat agar form terminal dan WebSocket memakai policy yang sama.
         foreach (self::BLOCKED_COMMAND_PATTERNS as $pattern) {
             if (preg_match($pattern, $command) === 1) {
                 return 'Command diblokir oleh policy terminal.';

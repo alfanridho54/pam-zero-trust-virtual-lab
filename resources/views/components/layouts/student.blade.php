@@ -8,7 +8,7 @@
 
     $navItems = [
         ['label' => 'Dashboard', 'route' => 'dashboard', 'active' => request()->routeIs('dashboard')],
-        ['label' => 'My Virtual Machines', 'route' => 'dashboard.vms', 'active' => request()->routeIs('dashboard.vms')],
+        ['label' => 'My Virtual Machines', 'route' => 'student.vms.index', 'active' => request()->routeIs('student.vms.*')],
         ['label' => 'Activity History', 'route' => 'dashboard.audit-logs', 'active' => request()->routeIs('dashboard.audit-logs')],
         ['label' => 'Help / Lab Guide', 'route' => 'dashboard.templates', 'active' => request()->routeIs('dashboard.templates')],
     ];

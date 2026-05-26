@@ -28,6 +28,7 @@ class ProxmoxService
 
     protected function request()
     {
+        // Semua request Proxmox memakai token API terpusat agar kredensial tidak tersebar di controller.
         return Http::timeout(15)
             ->acceptJson()
             ->withOptions([
@@ -39,27 +40,57 @@ class ProxmoxService
     }
 
     protected function sendProxmoxRequest(string $method, string $endpoint, array $data = []): array
-{
-    $response = $this->request()
-        ->asForm()
-        ->{$method}("{$this->host}/api2/json{$endpoint}", $data);
+    {
+        // Dipakai oleh action lifecycle VM nyata dari dashboard setelah ownership/protection lolos.
+        if (! $this->isConfigured()) {
+            return [
+                'success' => true,
+                'status' => 202,
+                'message' => 'OK (mock Proxmox lifecycle action)',
+                'data' => ['mock' => true, 'endpoint' => $endpoint],
+            ];
+        }
 
-    if ($response->failed()) {
-        return [
-            'success' => false,
-            'status' => $response->status(),
-            'message' => $response->body(),
-            'data' => $response->json(),
-        ];
+        try {
+            $response = $this->request()
+                ->asForm()
+                ->{$method}($this->url($endpoint), $data);
+        } catch (ConnectionException $exception) {
+            return $this->failure('Tidak dapat terhubung ke Proxmox API.', 0, [
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        return $this->normalizeResponse($response);
     }
 
-    return [
-        'success' => true,
-        'status' => $response->status(),
-        'message' => 'OK',
-        'data' => $response->json(),
-    ];
-}
+    protected function sendProxmoxDeleteRequest(string $endpoint, array $query = []): array
+    {
+        if (! $this->isConfigured()) {
+            return [
+                'success' => true,
+                'status' => 202,
+                'message' => 'OK (mock Proxmox delete action)',
+                'data' => ['mock' => true, 'endpoint' => $endpoint],
+            ];
+        }
+
+        $url = $this->url($endpoint);
+
+        if ($query !== []) {
+            $url .= '?'.http_build_query($query);
+        }
+
+        try {
+            $response = $this->request()->delete($url);
+        } catch (ConnectionException $exception) {
+            return $this->failure('Tidak dapat terhubung ke Proxmox API.', 0, [
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        return $this->normalizeResponse($response);
+    }
 
     public function version(): array
     {
@@ -85,17 +116,24 @@ class ProxmoxService
 
     public function startVmById(string $node, int $vmid): array
     {
-        return $this->sendProxmoxRequest('post', "/nodes/{$node}/qemu/{$vmid}/status/start", []);
+        return $this->sendProxmoxRequest('post', $this->qemuPath($node, $vmid, '/status/start'), []);
     }
 
     public function stopVmById(string $node, int $vmid): array
     {
-        return $this->sendProxmoxRequest('post', "/nodes/{$node}/qemu/{$vmid}/status/stop", []);
+        return $this->sendProxmoxRequest('post', $this->qemuPath($node, $vmid, '/status/stop'), []);
     }
 
     public function shutdownVmById(string $node, int $vmid): array
     {
-        return $this->sendProxmoxRequest('post', "/nodes/{$node}/qemu/{$vmid}/status/shutdown", []);
+        return $this->sendProxmoxRequest('post', $this->qemuPath($node, $vmid, '/status/shutdown'), []);
+    }
+
+    public function deleteVmById(string $node, int $vmid): array
+    {
+        return $this->sendProxmoxDeleteRequest($this->qemuPath($node, $vmid), [
+            'purge' => 1,
+        ]);
     }
 
     protected function vmPowerAction(string $node, int|string $vmid, string $action): array
@@ -109,6 +147,7 @@ class ProxmoxService
     protected function apiRequest(string $method, string $path, array $query = []): array
     {
         if (! $this->isConfigured()) {
+            // Mode lab tetap aman saat kredensial Proxmox belum disiapkan.
             return $this->failure('Konfigurasi Proxmox belum lengkap.', 0);
         }
 
@@ -121,7 +160,7 @@ class ProxmoxService
             ]);
         }
 
-        $json = $response->json();
+        $json = $this->safeJson($response);
         $data = is_array($json) && array_key_exists('data', $json) ? $json['data'] : $json;
 
         if ($response->failed()) {
@@ -139,6 +178,11 @@ class ProxmoxService
     protected function url(string $path): string
     {
         return $this->host.'/api2/json/'.ltrim($path, '/');
+    }
+
+    protected function qemuPath(string $node, int|string $vmid, string $suffix = ''): string
+    {
+        return sprintf('/nodes/%s/qemu/%d%s', rawurlencode($node), (int) $vmid, $suffix);
     }
 
     protected function isConfigured(): bool
@@ -165,6 +209,36 @@ class ProxmoxService
         return $response->body() ?: 'Proxmox API request gagal.';
     }
 
+    protected function normalizeResponse(Response $response): array
+    {
+        $json = $this->safeJson($response);
+        $data = is_array($json) && array_key_exists('data', $json) ? $json['data'] : $json;
+
+        if ($data === null && trim($response->body()) !== '') {
+            $data = $response->body();
+        }
+
+        if ($response->failed()) {
+            return $this->failure($this->messageFromResponse($response, $json), $response->status(), $data);
+        }
+
+        return [
+            'success' => true,
+            'status' => $response->status(),
+            'message' => 'OK',
+            'data' => $data,
+        ];
+    }
+
+    protected function safeJson(Response $response): mixed
+    {
+        try {
+            return $response->json();
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     protected function failure(string $message, int $status = 0, mixed $data = null): array
     {
         return [
@@ -177,6 +251,7 @@ class ProxmoxService
 
     public function createVm(array $payload): array
     {
+        // Implementasi mock menjaga flow ownership/audit dapat diuji tanpa membuat VM Proxmox nyata.
         return [
             'proxmox_id' => $payload['proxmox_id'] ?? 'vm-'.Str::lower(Str::random(10)),
             'node' => $payload['node'] ?? 'pve-mock',
@@ -195,10 +270,195 @@ class ProxmoxService
 
     public function deleteVm(Vm $vm): array
     {
+        $vmid = $vm->proxmoxVmid();
+
+        if ($vmid !== null && $this->isConfigured()) {
+            return $this->deleteVmById($vm->node, $vmid);
+        }
+
         return [
             'proxmox_id' => $vm->proxmox_id,
             'deleted' => true,
         ];
+    }
+
+    public function cloneStudentVmFromTemplate(string $vmName): array
+    {
+        if (! $this->isConfigured()) {
+            $templateVmid = (int) config('services.proxmox.student_template_vmid', 9000);
+            $node = $this->node !== '' ? $this->node : 'pve-mock';
+            $newVmid = random_int(200000, 299999);
+
+            return [
+                'success' => true,
+                'message' => 'OK (mock Proxmox template clone)',
+                'status' => 202,
+                'data' => ['mock' => true],
+                'proxmox_id' => (string) $newVmid,
+                'node' => $node,
+                'vmid' => $newVmid,
+                'name' => $vmName,
+                'source_template_vmid' => $templateVmid,
+            ];
+        }
+
+        $templateVmid = (int) config('services.proxmox.student_template_vmid');
+        $node = trim($this->node);
+
+        if ($node === '') {
+            return $this->failure('Konfigurasi PROXMOX_NODE belum diisi.', 0);
+        }
+
+        if ($templateVmid < 1) {
+            return $this->failure('Konfigurasi PROXMOX_STUDENT_TEMPLATE_VMID tidak valid.', 0);
+        }
+
+        $template = $this->apiRequest('get', $this->qemuPath($node, $templateVmid, '/config'));
+
+        if (! ($template['success'] ?? false)) {
+            return $this->failure(
+                'Template Proxmox VMID '.$templateVmid.' pada node '.$node.' tidak dapat diakses: '.($template['message'] ?? 'Proxmox API request gagal.'),
+                $template['status'] ?? 0,
+                $template['data'] ?? null,
+            );
+        }
+
+        if (! filter_var($template['data']['template'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+            return $this->failure('VMID '.$templateVmid.' pada node '.$node.' bukan Proxmox template.', 422, $template['data'] ?? null);
+        }
+
+        $nextId = $this->apiRequest('get', '/cluster/nextid');
+
+        if (! ($nextId['success'] ?? false) || ! is_numeric($nextId['data'] ?? null)) {
+            return $this->failure($nextId['message'] ?? 'Tidak dapat mengambil VMID baru dari Proxmox.', $nextId['status'] ?? 0, $nextId['data'] ?? null);
+        }
+
+        $newVmid = (int) $nextId['data'];
+        $payload = [
+            'newid' => $newVmid,
+            'name' => $vmName,
+            'full' => filter_var(config('services.proxmox.student_clone_full', true), FILTER_VALIDATE_BOOLEAN) ? 1 : 0,
+        ];
+
+        $storage = config('services.proxmox.student_storage');
+
+        if (is_string($storage) && $storage !== '') {
+            $payload['storage'] = $storage;
+        }
+
+        $clone = $this->sendProxmoxRequest('post', $this->qemuPath($node, $templateVmid, '/clone'), $payload);
+
+        if (! ($clone['success'] ?? false)) {
+            $clone['message'] = $this->cloneFailureMessage($clone, $templateVmid, $node);
+        } elseif (filter_var(config('services.proxmox.student_wait_for_clone', false), FILTER_VALIDATE_BOOLEAN)) {
+            $task = $this->waitForTask($node, $clone['data'] ?? null);
+
+            if (! ($task['success'] ?? false)) {
+                return [
+                    ...$task,
+                    'proxmox_id' => (string) $newVmid,
+                    'node' => $node,
+                    'vmid' => $newVmid,
+                    'name' => $vmName,
+                    'source_template_vmid' => $templateVmid,
+                    'request' => $payload,
+                    'task_upid' => $clone['data'] ?? null,
+                ];
+            }
+
+            $nameUpdate = $this->setVmConfig($node, $newVmid, [
+                'name' => $vmName,
+            ]);
+
+            if (! ($nameUpdate['success'] ?? false)) {
+                $clone['name_update'] = $nameUpdate;
+                $clone['message'] = 'OK (clone selesai, tetapi update nama VM di Proxmox gagal: '
+                    .($nameUpdate['message'] ?? 'Proxmox API request gagal.').')';
+            }
+        }
+
+        return [
+            ...$clone,
+            'proxmox_id' => (string) $newVmid,
+            'node' => $node,
+            'vmid' => $newVmid,
+            'name' => $vmName,
+            'source_template_vmid' => $templateVmid,
+            'request' => $payload,
+            'task_upid' => $clone['data'] ?? null,
+            'local_status' => filter_var(config('services.proxmox.student_wait_for_clone', false), FILTER_VALIDATE_BOOLEAN)
+                ? 'stopped'
+                : 'provisioning',
+        ];
+    }
+
+    public function setVmConfig(string $node, int $vmid, array $payload): array
+    {
+        return $this->sendProxmoxRequest('post', $this->qemuPath($node, $vmid, '/config'), $payload);
+    }
+
+    public function getTaskStatus(string $node, string $upid): array
+    {
+        return $this->apiRequest('get', sprintf(
+            '/nodes/%s/tasks/%s/status',
+            rawurlencode($node),
+            rawurlencode($upid),
+        ));
+    }
+
+    private function waitForTask(string $node, mixed $upid): array
+    {
+        if (! is_string($upid) || $upid === '') {
+            return [
+                'success' => true,
+                'message' => 'OK (tidak ada UPID task untuk dipoll)',
+                'status' => 200,
+                'data' => null,
+            ];
+        }
+
+        $timeoutAt = time() + max(1, (int) config('services.proxmox.task_timeout', 60));
+        $lastResponse = null;
+
+        do {
+            $lastResponse = $this->getTaskStatus($node, $upid);
+
+            if (! ($lastResponse['success'] ?? false)) {
+                return $lastResponse;
+            }
+
+            $task = $lastResponse['data'] ?? [];
+
+            if (($task['status'] ?? null) === 'stopped') {
+                if (($task['exitstatus'] ?? null) === 'OK') {
+                    return [
+                        'success' => true,
+                        'message' => 'OK',
+                        'status' => $lastResponse['status'] ?? 200,
+                        'data' => $task,
+                    ];
+                }
+
+                return $this->failure('Task Proxmox clone gagal: '.($task['exitstatus'] ?? 'unknown'), $lastResponse['status'] ?? 0, $task);
+            }
+
+            sleep(1);
+        } while (time() < $timeoutAt);
+
+        return $this->failure('Timeout menunggu task Proxmox clone selesai.', $lastResponse['status'] ?? 0, $lastResponse['data'] ?? null);
+    }
+
+    private function cloneFailureMessage(array $clone, int $templateVmid, string $node): string
+    {
+        $message = $clone['message'] ?? 'Proxmox clone request gagal.';
+
+        if (in_array((int) ($clone['status'] ?? 0), [401, 403], true)) {
+            $message .= ' Pastikan token Proxmox memiliki permission VM.Clone pada template VMID '
+                .$templateVmid.', VM.Allocate pada target, serta Datastore.AllocateSpace pada storage tujuan di node '
+                .$node.'.';
+        }
+
+        return $message;
     }
 
     public function cloneFromTemplate(LabTemplate $template, string $vmName): array

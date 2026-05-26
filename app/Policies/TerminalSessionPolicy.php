@@ -9,6 +9,9 @@ use Illuminate\Auth\Access\Response;
 
 class TerminalSessionPolicy
 {
+    /**
+     * Akses terminal mengikuti akses VM agar session tidak menjadi jalur bypass ownership.
+     */
     public function view(User $user, TerminalSession $terminalSession): Response
     {
         return $this->canAccessVm($user, $terminalSession->vm)
@@ -19,6 +22,7 @@ class TerminalSessionPolicy
     public function create(User $user, Vm $vm): Response
     {
         if ($this->metadataFlag($vm, 'system_vm') || $this->metadataFlag($vm, 'critical')) {
+            // VM system/critical tidak boleh dibuka terminalnya dari lab student.
             return Response::deny('Terminal tidak tersedia untuk VM system atau critical.');
         }
 
@@ -35,6 +39,7 @@ class TerminalSessionPolicy
     public function revoke(User $user, TerminalSession $terminalSession): Response
     {
         if ($user->role !== 'admin') {
+            // Revoke adalah kontrol darurat SOC/admin, bukan aksi pemilik sesi.
             return Response::deny('Hanya admin yang dapat revoke terminal session.');
         }
 
@@ -45,6 +50,7 @@ class TerminalSessionPolicy
 
     private function canAccessVm(User $user, Vm $vm): bool
     {
+        // RBAC sederhana: admin/guru dapat supervisi, student dibatasi pada VM miliknya.
         if ($user->role === 'admin') {
             return true;
         }

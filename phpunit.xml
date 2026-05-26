@@ -31,6 +31,10 @@
         <env name="VIEW_COMPILED_PATH" value="/tmp"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
+        <env name="PROXMOX_HOST" value=""/>
+        <env name="PROXMOX_NODE" value="pve-mock"/>
+        <env name="PROXMOX_TOKEN_ID" value=""/>
+        <env name="PROXMOX_TOKEN_SECRET" value=""/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>

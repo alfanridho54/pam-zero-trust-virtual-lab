@@ -40,6 +40,7 @@ class TerminalSession extends Model
     protected static function booted(): void
     {
         static::creating(function (TerminalSession $session): void {
+            // UUID publik dipakai untuk referensi UI/WebSocket tanpa membuka token sesi rahasia.
             $session->session_uuid ??= (string) Str::uuid();
         });
     }
@@ -124,6 +125,7 @@ class TerminalSession extends Model
 
     public function isEnded(): bool
     {
+        // Semua status terminal final diperlakukan sama: tidak boleh menerima command baru.
         return $this->ended_at !== null
             || in_array($this->status, [
                 TerminalSessionStatus::Closed,
@@ -146,6 +148,7 @@ class TerminalSession extends Model
             return false;
         }
 
+        // Expire pasif menjaga sesi lama tertutup walau tidak ada scheduler khusus yang berjalan.
         return $this->expire($now);
     }
 
@@ -165,6 +168,7 @@ class TerminalSession extends Model
             return true;
         }
 
+        // Siswa hanya boleh melihat sesi miliknya pada VM miliknya sendiri.
         return in_array($user->role, ['student', 'mahasiswa'], true)
             && $this->isOwnedBy($user)
             && $this->vm?->user_id === $user->id;
@@ -194,6 +198,7 @@ class TerminalSession extends Model
 
     private function finish(TerminalSessionStatus $status, ?Carbon $endedAt = null): bool
     {
+        // Satu jalur finalisasi menjaga closed/expired/revoked konsisten untuk audit dan dashboard SOC.
         return $this->forceFill([
             'status' => $status,
             'ended_at' => $endedAt ?? now(),

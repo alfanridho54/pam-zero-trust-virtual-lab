@@ -53,6 +53,7 @@ class Vm extends Model
 
     public function proxmoxVmid(): ?int
     {
+        // VMID dapat berasal dari proxmox_id atau metadata agar record mock dan real tetap bisa dicocokkan.
         if (is_numeric($this->proxmox_id)) {
             return (int) $this->proxmox_id;
         }
@@ -68,6 +69,29 @@ class Vm extends Model
 
     public function matchesProxmoxVm(string $node, int $vmid): bool
     {
+        // Pencocokan node+VMID adalah dasar isolasi ownership untuk inventory Proxmox nyata.
         return $this->node === $node && $this->proxmoxVmid() === $vmid;
+    }
+
+    public function isSystemVm(): bool
+    {
+        return $this->metadataFlag('system_vm');
+    }
+
+    public function isCriticalVm(): bool
+    {
+        return $this->proxmoxVmid() === 101
+            || $this->metadataFlag('critical')
+            || str($this->name)->lower()->contains('jump-server');
+    }
+
+    public function isProtectedVm(): bool
+    {
+        return $this->isSystemVm() || $this->isCriticalVm() || $this->metadataFlag('protected');
+    }
+
+    private function metadataFlag(string $key): bool
+    {
+        return filter_var($this->metadata[$key] ?? false, FILTER_VALIDATE_BOOLEAN);
     }
 }

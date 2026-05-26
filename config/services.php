@@ -41,6 +41,11 @@ return [
         'token_id' => env('PROXMOX_TOKEN_ID'),
         'token_secret' => env('PROXMOX_TOKEN_SECRET'),
         'verify_ssl' => env('PROXMOX_VERIFY_SSL', false),
+        'student_template_vmid' => env('PROXMOX_STUDENT_TEMPLATE_VMID', 9000),
+        'student_clone_full' => env('PROXMOX_STUDENT_CLONE_FULL', true),
+        'student_storage' => env('PROXMOX_STUDENT_STORAGE'),
+        'task_timeout' => env('PROXMOX_TASK_TIMEOUT', 60),
+        'student_wait_for_clone' => env('PROXMOX_STUDENT_WAIT_FOR_CLONE', false),
     ],
 
     'terminal' => [

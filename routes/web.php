@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\StudentVmController;
 use App\Http\Controllers\TerminalSessionController;
 use App\Services\ProxmoxService;
 use Illuminate\Support\Facades\Route;
@@ -23,6 +24,13 @@ Route::post('/dashboard/proxmox/vms/{node}/{vmid}/{action}', [DashboardControlle
     ->where('node', '[A-Za-z0-9._-]+')
     ->where('action', 'start|stop|shutdown')
     ->name('dashboard.proxmox.vms.action');
+
+Route::get('/student/vms', [StudentVmController::class, 'index'])->name('student.vms.index');
+Route::post('/student/vms', [StudentVmController::class, 'store'])->name('student.vms.store');
+Route::post('/student/vms/{vm}/{action}', [StudentVmController::class, 'action'])
+    ->where('action', 'start|stop|shutdown')
+    ->name('student.vms.action');
+Route::delete('/student/vms/{vm}', [StudentVmController::class, 'destroy'])->name('student.vms.destroy');
 
 Route::post('/vms/{vm}/terminal-sessions', [TerminalSessionController::class, 'store'])
     ->name('terminal-sessions.store');
