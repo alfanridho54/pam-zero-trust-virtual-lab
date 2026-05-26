@@ -180,6 +180,7 @@ class DashboardController extends Controller
             ->filter(fn ($vm) => is_array($vm))
             ->map(fn (array $vm) => $this->formatRealVm($vm, $user, $localVms))
             ->filter(fn (array $vm) => $vm['can_view'])
+            ->filter(fn (array $vm) => $this->roleFor($user) !== 'student' || (! $vm['is_system_vm'] && ! $vm['is_critical']))
             ->values();
         $canViewPamMonitoring = $this->roleFor($user) === 'admin';
 
@@ -230,7 +231,9 @@ class DashboardController extends Controller
         return match ($this->roleFor($user)) {
             'admin' => $query->get(),
             'guru' => $query->get(), // TODO: Batasi ke siswa bimbingan setelah relasi guru-siswa tersedia.
-            'student' => $user ? $query->where('user_id', $user->id)->get() : collect(),
+            'student' => $user
+                ? $query->where('user_id', $user->id)->get()->filter(fn (Vm $vm) => $vm->isStudentVisible())->values()
+                : collect(),
             default => collect(),
         };
     }
@@ -241,7 +244,7 @@ class DashboardController extends Controller
         $node = (string) ($vm['node'] ?? '-');
         $localVm = $this->findLocalVmInCollection($localVms, $node, $vmid);
         $canAccess = $this->canAccessRealVm($user, $localVm);
-        $systemVm = $this->metadataFlag($localVm, 'system_vm');
+        $systemVm = $localVm?->isSystemVm() ?? in_array($vmid, Vm::INFRASTRUCTURE_VMIDS, true);
         $critical = $this->isCriticalVm($node, $vmid, $vm['name'] ?? null, $localVm);
         $protected = $systemVm || $critical;
 
@@ -513,15 +516,15 @@ class DashboardController extends Controller
     private function isProtectedVm(string $node, int $vmid, ?Vm $localVm): bool
     {
         // Perlindungan VM memakai metadata lokal dan heuristic VM critical bawaan lab.
-        return $this->metadataFlag($localVm, 'system_vm')
+        return ($localVm?->isSystemVm() ?? in_array($vmid, Vm::INFRASTRUCTURE_VMIDS, true))
             || $this->isCriticalVm($node, $vmid, $localVm?->name, $localVm);
     }
 
     private function isCriticalVm(string $node, int $vmid, ?string $name = null, ?Vm $localVm = null): bool
     {
         // Jump server dan VMID khusus dianggap aset infrastruktur, bukan VM praktikum biasa.
-        return $vmid === 101
-            || $this->metadataFlag($localVm, 'critical')
+        return ($localVm?->isCritical() ?? false)
+            || in_array($vmid, [100, 101, 102], true)
             || str($name ?? '')->lower()->contains('jump-server');
     }
 

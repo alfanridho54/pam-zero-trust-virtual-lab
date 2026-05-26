@@ -53,7 +53,9 @@ class VmController extends Controller
 
         $quota = $user->quota;
 
-        if ($quota && $user->vms()->count() >= $quota->max_vms) {
+        $quotaVms = $this->quotaVmsFor($user);
+
+        if ($quota && $quotaVms->count() >= $quota->max_vms) {
             return response()->json(['message' => 'Kuota VM sudah penuh.'], 422);
         }
 
@@ -65,7 +67,7 @@ class VmController extends Controller
             }
 
             $requestedDiskGb = $data['disk_gb'] ?? 10;
-            $usedDiskGb = (int) $user->vms()->sum('disk_gb');
+            $usedDiskGb = (int) $quotaVms->sum('disk_gb');
 
             if ($usedDiskGb + $requestedDiskGb > $quota->max_disk_gb) {
                 return response()->json(['message' => 'Kuota storage VM sudah penuh.'], 422);
@@ -154,6 +156,14 @@ class VmController extends Controller
             'description' => $description,
             'metadata' => $metadata,
         ]);
+    }
+
+    private function quotaVmsFor(User $user)
+    {
+        return $user->vms()
+            ->studentVisible()
+            ->get()
+            ->filter(fn (Vm $vm) => $vm->isStudentVisible());
     }
 
     private function mockUser(Request $request): User

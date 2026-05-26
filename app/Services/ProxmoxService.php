@@ -287,7 +287,7 @@ class ProxmoxService
         if (! $this->isConfigured()) {
             $templateVmid = (int) config('services.proxmox.student_template_vmid', 9000);
             $node = $this->node !== '' ? $this->node : 'pve-mock';
-            $newVmid = random_int(200000, 299999);
+            $newVmid = $this->mockAvailableVmid();
 
             return [
                 'success' => true,
@@ -327,13 +327,13 @@ class ProxmoxService
             return $this->failure('VMID '.$templateVmid.' pada node '.$node.' bukan Proxmox template.', 422, $template['data'] ?? null);
         }
 
-        $nextId = $this->apiRequest('get', '/cluster/nextid');
+        $allocation = $this->allocateStudentVmid();
 
-        if (! ($nextId['success'] ?? false) || ! is_numeric($nextId['data'] ?? null)) {
-            return $this->failure($nextId['message'] ?? 'Tidak dapat mengambil VMID baru dari Proxmox.', $nextId['status'] ?? 0, $nextId['data'] ?? null);
+        if (! ($allocation['success'] ?? false)) {
+            return $allocation;
         }
 
-        $newVmid = (int) $nextId['data'];
+        $newVmid = (int) $allocation['vmid'];
         $payload = [
             'newid' => $newVmid,
             'name' => $vmName,
@@ -385,6 +385,7 @@ class ProxmoxService
             'name' => $vmName,
             'source_template_vmid' => $templateVmid,
             'request' => $payload,
+            'vmid_allocation' => $allocation['attempts'] ?? [],
             'task_upid' => $clone['data'] ?? null,
             'local_status' => filter_var(config('services.proxmox.student_wait_for_clone', false), FILTER_VALIDATE_BOOLEAN)
                 ? 'stopped'
@@ -459,6 +460,94 @@ class ProxmoxService
         }
 
         return $message;
+    }
+
+    private function allocateStudentVmid(): array
+    {
+        $attempts = [];
+        $candidate = null;
+        $maxAttempts = max(1, (int) config('services.proxmox.vmid_allocation_attempts', 25));
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            $candidate = $candidate === null
+                ? $this->nextProxmoxVmid()
+                : $this->nextSequentialVmid($candidate);
+
+            if (! ($candidate['success'] ?? false)) {
+                return $candidate;
+            }
+
+            $vmid = (int) $candidate['vmid'];
+            $reservedLocally = $this->localVmidExists($vmid);
+            $existsInProxmox = $this->proxmoxVmidExists($vmid);
+
+            $attempts[] = [
+                'vmid' => $vmid,
+                'local_reserved' => $reservedLocally,
+                'proxmox_exists' => $existsInProxmox,
+            ];
+
+            if (! $reservedLocally && ! $existsInProxmox) {
+                return [
+                    'success' => true,
+                    'vmid' => $vmid,
+                    'attempts' => $attempts,
+                ];
+            }
+        }
+
+        return $this->failure('Tidak dapat menemukan VMID Proxmox yang aman untuk lokal dan cluster.', 409, [
+            'attempts' => $attempts,
+        ]);
+    }
+
+    private function mockAvailableVmid(): int
+    {
+        do {
+            $vmid = random_int(200000, 299999);
+        } while ($this->localVmidExists($vmid));
+
+        return $vmid;
+    }
+
+    private function nextProxmoxVmid(): array
+    {
+        $nextId = $this->apiRequest('get', '/cluster/nextid');
+
+        if (! ($nextId['success'] ?? false) || ! is_numeric($nextId['data'] ?? null)) {
+            return $this->failure($nextId['message'] ?? 'Tidak dapat mengambil VMID baru dari Proxmox.', $nextId['status'] ?? 0, $nextId['data'] ?? null);
+        }
+
+        return [
+            'success' => true,
+            'vmid' => (int) $nextId['data'],
+        ];
+    }
+
+    private function nextSequentialVmid(array $candidate): array
+    {
+        return [
+            'success' => true,
+            'vmid' => ((int) $candidate['vmid']) + 1,
+        ];
+    }
+
+    private function localVmidExists(int $vmid): bool
+    {
+        return Vm::withTrashed()
+            ->get()
+            ->contains(fn (Vm $vm) => $vm->proxmoxVmid() === $vmid);
+    }
+
+    private function proxmoxVmidExists(int $vmid): bool
+    {
+        if ($this->node === '') {
+            return false;
+        }
+
+        $response = $this->getVm($this->node, $vmid);
+
+        return (bool) ($response['success'] ?? false);
     }
 
     public function cloneFromTemplate(LabTemplate $template, string $vmName): array

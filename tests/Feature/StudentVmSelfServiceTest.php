@@ -77,6 +77,85 @@ class StudentVmSelfServiceTest extends TestCase
         ]);
     }
 
+    public function test_infrastructure_vms_are_hidden_from_student_dashboard(): void
+    {
+        $this->seed();
+
+        $student = User::where('email', 'siswa1@lab.test')->firstOrFail();
+        $systemVm = $this->createVmForOwner($student, 'Windows10 Infrastructure VM', 100);
+        $templateVm = $this->createVmForOwner($student, 'Ubuntu Student Template', 102);
+        $normalVm = $this->createVmForOwner($student, 'Visible Student VM', 2401);
+
+        $systemVm->refresh();
+        $templateVm->refresh();
+
+        $this->assertTrue($systemVm->isSystemVm());
+        $this->assertTrue($systemVm->isCritical());
+        $this->assertTrue($templateVm->isSystemVm());
+        $this->assertTrue($templateVm->isCritical());
+        $this->assertTrue($systemVm->metadata['system_vm']);
+        $this->assertTrue($systemVm->metadata['critical']);
+        $this->assertTrue($templateVm->metadata['system_vm']);
+        $this->assertTrue($templateVm->metadata['critical']);
+
+        $this->actingAs($student)
+            ->get(route('student.vms.index'))
+            ->assertOk()
+            ->assertSee($normalVm->name)
+            ->assertDontSee($systemVm->name)
+            ->assertDontSee($templateVm->name);
+    }
+
+    public function test_infrastructure_vms_are_excluded_from_student_quota(): void
+    {
+        $this->seed();
+        config(['lab.max_student_vms' => 1]);
+
+        $student = User::where('email', 'siswa1@lab.test')->firstOrFail();
+        $this->createVmForOwner($student, 'Ubuntu Student Template', 102);
+
+        $this->actingAs($student)
+            ->post(route('student.vms.store'), [
+                'name' => 'Allowed Normal VM',
+            ])
+            ->assertRedirect(route('student.vms.index'))
+            ->assertSessionHas('status');
+
+        $this->assertDatabaseHas('vms', [
+            'user_id' => $student->id,
+            'name' => 'Allowed Normal VM',
+        ]);
+    }
+
+    public function test_student_cannot_control_vmid_100_or_102_even_without_manual_flags(): void
+    {
+        $this->seed();
+
+        $student = User::where('email', 'siswa1@lab.test')->firstOrFail();
+        $windowsVm = $this->createVmForOwner($student, 'Windows10', 100);
+        $templateVm = $this->createVmForOwner($student, 'Ubuntu Student Template', 102);
+
+        $this->actingAs($student)
+            ->post(route('student.vms.action', [$windowsVm, 'start']))
+            ->assertRedirect()
+            ->assertSessionHas('error');
+
+        $this->actingAs($student)
+            ->post(route('student.vms.action', [$templateVm, 'start']))
+            ->assertRedirect()
+            ->assertSessionHas('error');
+
+        $this->assertDatabaseHas('vms', [
+            'id' => $windowsVm->id,
+            'status' => 'stopped',
+        ]);
+
+        $this->assertDatabaseHas('vms', [
+            'id' => $templateVm->id,
+            'status' => 'stopped',
+        ]);
+    }
+
     public function test_quota_blocks_extra_student_vm_creation(): void
     {
         $this->seed();
@@ -208,6 +287,57 @@ class StudentVmSelfServiceTest extends TestCase
             'user_id' => $student->id,
             'vm_id' => null,
             'action' => 'student.vm.create.failed',
+        ]);
+    }
+
+    public function test_local_save_failure_after_clone_is_audited_as_provisioning_mismatch(): void
+    {
+        $this->seed();
+
+        $student = User::where('email', 'siswa1@lab.test')->firstOrFail();
+        $oldVm = $this->createVmForOwner($student, 'Old Deleted VM', 2501);
+        $oldVm->delete();
+
+        $this->app->instance(ProxmoxService::class, new class extends ProxmoxService
+        {
+            public function __construct()
+            {
+            }
+
+            public function cloneStudentVmFromTemplate(string $vmName): array
+            {
+                return [
+                    'success' => true,
+                    'status' => 200,
+                    'message' => 'OK',
+                    'data' => 'UPID:pve1:clone:2501:',
+                    'proxmox_id' => '2501',
+                    'node' => 'pve1',
+                    'vmid' => 2501,
+                    'name' => $vmName,
+                    'source_template_vmid' => 102,
+                    'task_upid' => 'UPID:pve1:clone:2501:',
+                    'local_status' => 'provisioning',
+                ];
+            }
+        });
+
+        $this->actingAs($student)
+            ->post(route('student.vms.store'), [
+                'name' => 'Duplicate Local Save VM',
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('error');
+
+        $this->assertDatabaseMissing('vms', [
+            'user_id' => $student->id,
+            'name' => 'Duplicate Local Save VM',
+        ]);
+
+        $this->assertDatabaseHas('audit_logs', [
+            'user_id' => $student->id,
+            'vm_id' => null,
+            'action' => 'student.vm.provisioning_mismatch',
         ]);
     }
 

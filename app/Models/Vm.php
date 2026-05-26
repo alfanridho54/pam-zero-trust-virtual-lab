@@ -4,12 +4,15 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Vm extends Model
 {
     use SoftDeletes;
+
+    public const INFRASTRUCTURE_VMIDS = [100, 102];
 
     protected $fillable = [
         'user_id',
@@ -29,6 +32,21 @@ class Vm extends Model
         return [
             'metadata' => 'array',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (Vm $vm): void {
+            if (! $vm->hasInfrastructureVmid()) {
+                return;
+            }
+
+            $vm->metadata = [
+                ...($vm->metadata ?? []),
+                'system_vm' => true,
+                'critical' => true,
+            ];
+        });
     }
 
     public function user(): BelongsTo
@@ -75,14 +93,20 @@ class Vm extends Model
 
     public function isSystemVm(): bool
     {
-        return $this->metadataFlag('system_vm');
+        return $this->hasInfrastructureVmid() || $this->metadataFlag('system_vm');
     }
 
     public function isCriticalVm(): bool
     {
-        return $this->proxmoxVmid() === 101
+        return $this->hasInfrastructureVmid()
+            || $this->proxmoxVmid() === 101
             || $this->metadataFlag('critical')
             || str($this->name)->lower()->contains('jump-server');
+    }
+
+    public function isCritical(): bool
+    {
+        return $this->isCriticalVm();
     }
 
     public function isProtectedVm(): bool
@@ -90,8 +114,25 @@ class Vm extends Model
         return $this->isSystemVm() || $this->isCriticalVm() || $this->metadataFlag('protected');
     }
 
+    public function isStudentVisible(): bool
+    {
+        return ! $this->trashed() && ! $this->isSystemVm() && ! $this->isCritical();
+    }
+
+    public function scopeStudentVisible(Builder $query): Builder
+    {
+        return $query->whereNull($this->getQualifiedDeletedAtColumn());
+    }
+
     private function metadataFlag(string $key): bool
     {
         return filter_var($this->metadata[$key] ?? false, FILTER_VALIDATE_BOOLEAN);
+    }
+
+    private function hasInfrastructureVmid(): bool
+    {
+        $vmid = $this->proxmoxVmid();
+
+        return $vmid !== null && in_array($vmid, self::INFRASTRUCTURE_VMIDS, true);
     }
 }

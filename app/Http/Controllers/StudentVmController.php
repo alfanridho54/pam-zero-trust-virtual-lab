@@ -8,9 +8,11 @@ use App\Models\Vm;
 use App\Services\ProxmoxService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
+use Throwable;
 
 class StudentVmController extends Controller
 {
@@ -25,8 +27,11 @@ class StudentVmController extends Controller
         $vms = Vm::query()
             ->with('user')
             ->where('user_id', $user->id)
+            ->studentVisible()
             ->latest()
-            ->get();
+            ->get()
+            ->filter(fn (Vm $vm) => $vm->isStudentVisible())
+            ->values();
 
         $vms->each(fn (Vm $vm) => $this->syncProvisioningStatus($user, $vm));
 
@@ -51,7 +56,7 @@ class StudentVmController extends Controller
             ],
         ]);
 
-        if ($user->vms()->count() >= $this->maxStudentVms($user)) {
+        if ($this->studentQuotaVmCount($user) >= $this->maxStudentVms($user)) {
             return back()->withInput()->with('error', 'Kuota VM student sudah penuh.');
         }
 
@@ -66,21 +71,31 @@ class StudentVmController extends Controller
             return back()->withInput()->with('error', 'Create VM gagal: '.($clone['message'] ?? 'Proxmox API request gagal.'));
         }
 
-        $vm = $user->vms()->create([
-            'name' => $data['name'],
-            'proxmox_id' => (string) $clone['proxmox_id'],
-            'node' => $clone['node'],
-            'status' => $clone['local_status'] ?? 'stopped',
-            'cpu_cores' => 1,
-            'memory_mb' => 1024,
-            'disk_gb' => 10,
-            'metadata' => [
-                'vmid' => $clone['vmid'] ?? null,
-                'source_template_vmid' => $clone['source_template_vmid'] ?? null,
-                'provisioning' => 'template-clone',
-                'task_upid' => $clone['task_upid'] ?? null,
-            ],
-        ]);
+        try {
+            $vm = DB::transaction(fn () => $user->vms()->create([
+                'name' => $data['name'],
+                'proxmox_id' => (string) $clone['proxmox_id'],
+                'node' => $clone['node'],
+                'status' => $clone['local_status'] ?? 'stopped',
+                'cpu_cores' => 1,
+                'memory_mb' => 1024,
+                'disk_gb' => 10,
+                'metadata' => [
+                    'vmid' => $clone['vmid'] ?? null,
+                    'source_template_vmid' => $clone['source_template_vmid'] ?? null,
+                    'provisioning' => 'template-clone',
+                    'task_upid' => $clone['task_upid'] ?? null,
+                ],
+            ]));
+        } catch (Throwable $exception) {
+            $this->audit($user, null, 'student.vm.provisioning_mismatch', 'Proxmox clone diterima tetapi record VM lokal gagal disimpan.', [
+                'request' => $data,
+                'proxmox' => $clone,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return back()->withInput()->with('error', 'Create VM gagal setelah Proxmox menerima clone. Admin perlu rekonsiliasi VMID '.($clone['vmid'] ?? '-').'.');
+        }
 
         $this->audit($user, $vm, 'student.vm.created', 'Student membuat VM dari template Proxmox.', [
             'proxmox' => $clone,
@@ -218,6 +233,15 @@ class StudentVmController extends Controller
     private function maxStudentVms(User $user): int
     {
         return max(1, (int) ($user->quota?->max_vms ?: config('lab.max_student_vms', 2)));
+    }
+
+    private function studentQuotaVmCount(User $user): int
+    {
+        return $user->vms()
+            ->studentVisible()
+            ->get()
+            ->filter(fn (Vm $vm) => $vm->isStudentVisible())
+            ->count();
     }
 
     private function syncProvisioningStatus(User $user, Vm $vm): void

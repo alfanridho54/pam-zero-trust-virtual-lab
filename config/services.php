@@ -46,6 +46,7 @@ return [
         'student_storage' => env('PROXMOX_STUDENT_STORAGE'),
         'task_timeout' => env('PROXMOX_TASK_TIMEOUT', 60),
         'student_wait_for_clone' => env('PROXMOX_STUDENT_WAIT_FOR_CLONE', false),
+        'vmid_allocation_attempts' => env('PROXMOX_VMID_ALLOCATION_ATTEMPTS', 25),
     ],
 
     'terminal' => [

@@ -161,17 +161,44 @@ class DashboardTest extends TestCase
             ->assertDontSee('uid=1000(student)');
     }
 
-    private function createVmForOwner(User $owner, string $name): Vm
+    public function test_student_main_dashboard_only_shows_normal_assigned_vm(): void
+    {
+        $this->seed();
+
+        $student = User::where('email', 'siswa1@lab.test')->firstOrFail();
+        $systemVm = $this->createVmForOwner($student, 'Windows10 Student Infrastructure', [
+            'proxmox_id' => '100',
+            'metadata' => ['system_vm' => true, 'critical' => true, 'vmid' => 100],
+        ]);
+        $criticalVm = $this->createVmForOwner($student, 'Critical Student Template', [
+            'proxmox_id' => '102',
+            'metadata' => ['critical' => true, 'vmid' => 102],
+        ]);
+        $deletedVm = $this->createVmForOwner($student, 'Deleted Student Lab VM');
+        $deletedVm->delete();
+        $normalVm = $this->createVmForOwner($student, 'Normal Student Assigned VM');
+
+        $this->actingAs($student)
+            ->get('/dashboard')
+            ->assertOk()
+            ->assertSee($normalVm->name)
+            ->assertDontSee($systemVm->name)
+            ->assertDontSee($criticalVm->name)
+            ->assertDontSee($deletedVm->name)
+            ->assertSee('1 assigned');
+    }
+
+    private function createVmForOwner(User $owner, string $name, array $overrides = []): Vm
     {
         return $owner->vms()->create([
             'name' => $name,
-            'proxmox_id' => 'dashboard-command-vm-'.str()->random(8),
+            'proxmox_id' => $overrides['proxmox_id'] ?? 'dashboard-command-vm-'.str()->random(8),
             'node' => 'pve-mock',
-            'status' => 'running',
+            'status' => $overrides['status'] ?? 'running',
             'cpu_cores' => 1,
             'memory_mb' => 1024,
             'disk_gb' => 10,
-            'metadata' => [
+            'metadata' => $overrides['metadata'] ?? [
                 'ssh_host' => '127.0.0.1',
                 'ssh_port' => 22,
                 'ssh_username' => 'student',
