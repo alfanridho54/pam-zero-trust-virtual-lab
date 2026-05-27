@@ -11,6 +11,7 @@ use App\Models\Vm;
 use App\Services\SshCommandResult;
 use App\Services\SshCommandService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
 class TerminalCommandExecutionTest extends TestCase
@@ -53,6 +54,121 @@ class TerminalCommandExecutionTest extends TestCase
             'status' => CommandLogStatus::Succeeded->value,
             'exit_code' => 0,
         ]);
+    }
+
+    public function test_dynamic_vm_ssh_command_credentials_prefer_vm_metadata_password(): void
+    {
+        config(['services.terminal.ssh_password' => 'wrong-config-password']);
+
+        $user = $this->student();
+        $terminalSession = $this->terminalSessionFor($user, [
+            'provisioning' => 'template-clone',
+            'ssh_username' => 'metadata-user',
+            'ssh_password' => 'metadata-secret',
+            'ssh_port' => 2222,
+        ], [
+            'ssh_username' => 'session-user',
+            'ssh_port' => 22,
+        ]);
+
+        $credentials = $this->credentialInspector()->inspect($terminalSession->load('vm'));
+
+        $this->assertSame('metadata-user', $credentials['username']);
+        $this->assertSame('metadata-secret', $credentials['password']);
+        $this->assertSame(2222, $credentials['port']);
+        $this->assertSame('vm_metadata_password', $credentials['source']);
+    }
+
+    public function test_static_ssh_command_credentials_use_config_fallback(): void
+    {
+        config(['services.terminal.ssh_password' => 'config-secret']);
+
+        $user = $this->student();
+        $terminalSession = $this->terminalSessionFor($user, [
+            'ssh_username' => 'student',
+        ]);
+
+        $credentials = $this->credentialInspector()->inspect($terminalSession->load('vm'));
+
+        $this->assertSame('student', $credentials['username']);
+        $this->assertSame('config-secret', $credentials['password']);
+        $this->assertSame(22, $credentials['port']);
+        $this->assertSame('config_fallback', $credentials['source']);
+    }
+
+    public function test_ssh_command_credential_source_logging_never_includes_secrets(): void
+    {
+        Log::spy();
+
+        $user = $this->student();
+        $terminalSession = $this->terminalSessionFor($user, [
+            'provisioning' => 'template-clone',
+            'ssh_username' => 'metadata-user',
+            'ssh_password' => 'metadata-secret',
+            'ssh_port' => 1,
+        ], [
+            'ssh_host' => '127.0.0.1',
+            'ssh_port' => 1,
+            'ssh_username' => 'session-user',
+        ]);
+
+        app(SshCommandService::class)->execute($terminalSession, 'whoami', 1);
+
+        Log::shouldHaveReceived('debug')
+            ->with('SSH credential source resolved.', \Mockery::on(function (array $context): bool {
+                $encoded = json_encode($context);
+
+                return ($context['credential_source'] ?? null) === 'vm_metadata_password'
+                    && ! str_contains($encoded, 'metadata-secret')
+                    && ! str_contains($encoded, 'wrong-config-password');
+            }))
+            ->once();
+    }
+
+    public function test_terminal_test_ssh_command_prints_safe_fields_and_runs_whoami(): void
+    {
+        $user = $this->student();
+        $vm = Vm::create([
+            'user_id' => $user->id,
+            'name' => 'diagnostic-vm',
+            'proxmox_id' => '4242',
+            'node' => 'pve-mock',
+            'status' => 'running',
+            'cpu_cores' => 1,
+            'memory_mb' => 1024,
+            'disk_gb' => 10,
+            'metadata' => [
+                'provisioning' => 'template-clone',
+                'vmid' => 4242,
+                'ssh_host' => '172.16.1.24',
+                'ssh_port' => 2222,
+                'ssh_username' => 'labuser',
+                'ssh_password' => 'metadata-secret',
+            ],
+        ]);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: true,
+                    exitCode: 0,
+                    durationMs: 10,
+                    output: "labuser\n",
+                );
+            }
+        });
+
+        $this->artisan('terminal:test-ssh', ['proxmox_vmid' => $vm->proxmox_id])
+            ->expectsOutput('host: 172.16.1.24')
+            ->expectsOutput('port: 2222')
+            ->expectsOutput('username: labuser')
+            ->expectsOutput('credential_source: vm_metadata_password')
+            ->expectsOutput('auth: success')
+            ->expectsOutput('whoami: labuser')
+            ->doesntExpectOutput('metadata-secret')
+            ->assertExitCode(0);
     }
 
     public function test_blocked_terminal_command_is_logged_without_execution(): void
@@ -324,5 +440,16 @@ class TerminalCommandExecutionTest extends TestCase
             'metadata' => [],
             ...$sessionAttributes,
         ]);
+    }
+
+    private function credentialInspector(): object
+    {
+        return new class extends SshCommandService
+        {
+            public function inspect(TerminalSession $terminalSession): array
+            {
+                return $this->resolveCredentials($terminalSession);
+            }
+        };
     }
 }

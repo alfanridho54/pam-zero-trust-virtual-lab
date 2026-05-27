@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\LabTemplate;
 use App\Models\Vm;
+use App\Models\VmTemplate;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -19,7 +20,7 @@ class ProxmoxService
 
     public function __construct()
     {
-        $this->host = rtrim((string) config('services.proxmox.host'), '/');
+        $this->host = $this->normalizeApiHost((string) config('services.proxmox.host'));
         $this->node = (string) config('services.proxmox.node');
         $this->tokenId = (string) config('services.proxmox.token_id');
         $this->tokenSecret = (string) config('services.proxmox.token_secret');
@@ -129,6 +130,33 @@ class ProxmoxService
         return $this->sendProxmoxRequest('post', $this->qemuPath($node, $vmid, '/status/shutdown'), []);
     }
 
+    public function detectGuestIpv4(string $node, int $vmid): ?string
+    {
+        if (! $this->isConfigured()) {
+            return null;
+        }
+
+        $lastAttempt = 8;
+
+        for ($attempt = 1; $attempt <= $lastAttempt; $attempt++) {
+            $response = $this->apiRequest('get', $this->qemuPath($node, $vmid, '/agent/network-get-interfaces'));
+
+            if ($response['success'] ?? false) {
+                $ip = $this->extractGuestIpv4($response['data'] ?? []);
+
+                if ($ip !== null) {
+                    return $ip;
+                }
+            }
+
+            if ($attempt < $lastAttempt) {
+                sleep(3);
+            }
+        }
+
+        return null;
+    }
+
     public function deleteVmById(string $node, int $vmid): array
     {
         return $this->sendProxmoxDeleteRequest($this->qemuPath($node, $vmid), [
@@ -187,6 +215,10 @@ class ProxmoxService
 
     protected function isConfigured(): bool
     {
+        if (! isset($this->host, $this->tokenId, $this->tokenSecret)) {
+            return false;
+        }
+
         return $this->host !== '' && $this->tokenId !== '' && $this->tokenSecret !== '';
     }
 
@@ -284,10 +316,28 @@ class ProxmoxService
 
     public function cloneStudentVmFromTemplate(string $vmName): array
     {
+        $templateVmid = (int) config('services.proxmox.student_template_vmid');
+        $node = trim($this->node);
+
+        return $this->cloneStudentVm($vmName, $node, $templateVmid);
+    }
+
+    public function cloneStudentVmFromVmTemplate(VmTemplate $template, string $vmName): array
+    {
+        return $this->cloneStudentVm(
+            $vmName,
+            $template->proxmox_node,
+            $template->proxmox_template_id,
+        );
+    }
+
+    private function cloneStudentVm(string $vmName, string $node, int $templateVmid): array
+    {
+        $node = trim($node);
+
         if (! $this->isConfigured()) {
-            $templateVmid = (int) config('services.proxmox.student_template_vmid', 9000);
-            $node = $this->node !== '' ? $this->node : 'pve-mock';
             $newVmid = $this->mockAvailableVmid();
+            $mockNode = $node !== '' ? $node : ($this->node !== '' ? $this->node : 'pve-mock');
 
             return [
                 'success' => true,
@@ -295,15 +345,12 @@ class ProxmoxService
                 'status' => 202,
                 'data' => ['mock' => true],
                 'proxmox_id' => (string) $newVmid,
-                'node' => $node,
+                'node' => $mockNode,
                 'vmid' => $newVmid,
                 'name' => $vmName,
                 'source_template_vmid' => $templateVmid,
             ];
         }
-
-        $templateVmid = (int) config('services.proxmox.student_template_vmid');
-        $node = trim($this->node);
 
         if ($node === '') {
             return $this->failure('Konfigurasi PROXMOX_NODE belum diisi.', 0);
@@ -327,7 +374,7 @@ class ProxmoxService
             return $this->failure('VMID '.$templateVmid.' pada node '.$node.' bukan Proxmox template.', 422, $template['data'] ?? null);
         }
 
-        $allocation = $this->allocateStudentVmid();
+        $allocation = $this->allocateStudentVmid($node);
 
         if (! ($allocation['success'] ?? false)) {
             return $allocation;
@@ -462,7 +509,7 @@ class ProxmoxService
         return $message;
     }
 
-    private function allocateStudentVmid(): array
+    private function allocateStudentVmid(string $node): array
     {
         $attempts = [];
         $candidate = null;
@@ -479,7 +526,7 @@ class ProxmoxService
 
             $vmid = (int) $candidate['vmid'];
             $reservedLocally = $this->localVmidExists($vmid);
-            $existsInProxmox = $this->proxmoxVmidExists($vmid);
+            $existsInProxmox = $this->proxmoxVmidExists($node, $vmid);
 
             $attempts[] = [
                 'vmid' => $vmid,
@@ -539,15 +586,104 @@ class ProxmoxService
             ->contains(fn (Vm $vm) => $vm->proxmoxVmid() === $vmid);
     }
 
-    private function proxmoxVmidExists(int $vmid): bool
+    private function proxmoxVmidExists(string $node, int $vmid): bool
     {
-        if ($this->node === '') {
+        if (trim($node) === '') {
             return false;
         }
 
-        $response = $this->getVm($this->node, $vmid);
+        $response = $this->getVm($node, $vmid);
 
         return (bool) ($response['success'] ?? false);
+    }
+
+    private function extractGuestIpv4(mixed $data): ?string
+    {
+        if (! is_array($data)) {
+            return null;
+        }
+
+        $interfaces = $data['result'] ?? $data;
+        $privateIps = [];
+
+        if (! is_array($interfaces)) {
+            return null;
+        }
+
+        foreach ($interfaces as $interface) {
+            if (! is_array($interface)) {
+                continue;
+            }
+
+            $addresses = $interface['ip-addresses'] ?? $interface['ip_addresses'] ?? [];
+
+            if (! is_array($addresses)) {
+                continue;
+            }
+
+            foreach ($addresses as $address) {
+                if (! is_array($address)) {
+                    continue;
+                }
+
+                $type = $address['ip-address-type'] ?? $address['ip_address_type'] ?? null;
+                $ip = $address['ip-address'] ?? $address['ip_address'] ?? null;
+
+                if (($type !== null && $type !== 'ipv4') || ! is_string($ip) || ! $this->isUsablePrivateIpv4($ip)) {
+                    continue;
+                }
+
+                if ($this->ipv4InCidr($ip, '172.16.1.0', 27)) {
+                    return $ip;
+                }
+
+                $privateIps[] = $ip;
+            }
+        }
+
+        return $privateIps[0] ?? null;
+    }
+
+    private function isUsablePrivateIpv4(string $ip): bool
+    {
+        if (! filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            return false;
+        }
+
+        if (str_starts_with($ip, '127.') || str_starts_with($ip, '169.254.')) {
+            return false;
+        }
+
+        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE) === false;
+    }
+
+    private function ipv4InCidr(string $ip, string $network, int $prefix): bool
+    {
+        $ipLong = ip2long($ip);
+        $networkLong = ip2long($network);
+
+        if ($ipLong === false || $networkLong === false) {
+            return false;
+        }
+
+        $mask = -1 << (32 - $prefix);
+
+        return ($ipLong & $mask) === ($networkLong & $mask);
+    }
+
+    private function normalizeApiHost(string $host): string
+    {
+        $host = rtrim(trim($host), '/');
+
+        if ($host === '') {
+            return '';
+        }
+
+        if (! str_starts_with($host, 'http://') && ! str_starts_with($host, 'https://')) {
+            $host = 'https://'.$host;
+        }
+
+        return $host;
     }
 
     public function cloneFromTemplate(LabTemplate $template, string $vmName): array

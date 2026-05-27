@@ -57,6 +57,9 @@ return [
         'command_timeout' => env('PRACTICE_VM_COMMAND_TIMEOUT', 10),
         'websocket_url' => env('TERMINAL_WEBSOCKET_URL', 'ws://127.0.0.1:8090'),
         'websocket_ticket_ttl' => env('TERMINAL_WEBSOCKET_TICKET_TTL', 600),
+        'ssh_ready_attempts' => env('TERMINAL_SSH_READY_ATTEMPTS', 6),
+        'ssh_ready_delay_ms' => env('TERMINAL_SSH_READY_DELAY_MS', 500),
+        'ssh_ready_timeout' => env('TERMINAL_SSH_READY_TIMEOUT', 1.0),
     ],
 
 ];

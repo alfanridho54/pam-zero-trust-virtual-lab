@@ -9,7 +9,9 @@ use App\Models\CommandLog;
 use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
+use App\Services\ProxmoxService;
 use App\Services\SshCommandService;
+use App\Services\SshReadinessService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
@@ -27,7 +29,7 @@ class TerminalSessionController extends Controller
      * Membuka lifecycle sesi PAM untuk VM yang sudah lolos policy ownership.
      * Sesi dibuat sebagai pending agar akses SSH baru aktif saat command pertama dijalankan.
      */
-    public function store(Request $request, Vm $vm): RedirectResponse
+    public function store(Request $request, Vm $vm, ProxmoxService $proxmox, SshReadinessService $sshReadiness): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
         abort_unless($user, 403, 'Anda tidak memiliki akses ke VM ini.');
@@ -37,8 +39,25 @@ class TerminalSessionController extends Controller
         if ($authorization->denied()) {
             $this->audit($user, $vm, 'terminal.session.denied', $authorization->message() ?: 'Terminal session ditolak.');
 
-            return back()->with('error', $authorization->message() ?: 'Anda tidak memiliki akses ke VM ini.');
+            abort(403, $authorization->message() ?: 'Anda tidak memiliki akses ke VM ini.');
         }
+
+        if ($vm->status !== 'running') {
+            return back()->with('error', 'Start this VM before opening terminal access.');
+        }
+
+        $sshHost = $this->targetHostFor($vm);
+
+        if ($sshHost === null) {
+            $sshHost = $this->detectAndStoreGuestIp($vm, $proxmox);
+        }
+
+        if ($sshHost === null) {
+            return back()->with('error', 'SSH access for this VM is not configured yet.');
+        }
+
+        $sshPort = $this->targetPortFor($vm);
+        $sshReady = $sshReadiness->waitUntilReachable($sshHost, $sshPort);
 
         $terminalSession = TerminalSession::create([
             'session_token' => $this->makeSessionToken(),
@@ -47,8 +66,8 @@ class TerminalSessionController extends Controller
             'node' => $vm->node,
             'proxmox_id' => $vm->proxmox_id,
             'vmid' => $vm->proxmoxVmid(),
-            'ssh_host' => $this->targetHostFor($vm),
-            'ssh_port' => $this->targetPortFor($vm),
+            'ssh_host' => $sshHost,
+            'ssh_port' => $sshPort,
             'ssh_username' => $this->targetUsernameFor($vm),
             'status' => TerminalSessionStatus::Pending,
             'client_ip' => $request->ip(),
@@ -58,7 +77,7 @@ class TerminalSessionController extends Controller
             'expires_at' => now()->addMinutes(30),
             'metadata' => [
                 'source' => 'web-dashboard',
-                'ssh_ready' => false,
+                'ssh_ready' => $sshReady,
             ],
         ]);
 
@@ -67,12 +86,16 @@ class TerminalSessionController extends Controller
             'expires_at' => $terminalSession->expires_at?->toISOString(),
         ]);
 
+        $message = $sshReady
+            ? 'Terminal session dibuat. SSH siap digunakan.'
+            : 'Terminal session dibuat. SSH VM masih disiapkan, silakan tunggu sebentar lalu refresh halaman ini.';
+
         return redirect()
             ->route('terminal-sessions.show', $terminalSession)
-            ->with('status', 'Terminal session dibuat. SSH belum diaktifkan.');
+            ->with('status', $message);
     }
 
-    public function show(Request $request, TerminalSession $terminalSession): View
+    public function show(Request $request, TerminalSession $terminalSession, SshReadinessService $sshReadiness): View
     {
         $user = $this->resolveDashboardUser($request);
         abort_unless($user, 403, 'Anda tidak memiliki akses ke VM ini.');
@@ -82,21 +105,24 @@ class TerminalSessionController extends Controller
         $terminalSession->load(['user', 'vm']);
         // Pastikan sesi yang melewati TTL tidak lagi mendapat tiket terminal baru.
         $terminalSession->expireIfPastDue();
+        $this->refreshSshReadiness($terminalSession, $sshReadiness);
         $commandLogs = $terminalSession->commandLogs()
             ->recent()
             ->limit(10)
             ->get();
+        $terminalAccessError = $this->terminalTargetBlockedReason($terminalSession);
 
         return view('terminal-sessions.show', [
             'terminalSession' => $terminalSession,
             'commandLogs' => $commandLogs,
             'defaultCommand' => self::DEFAULT_TEST_COMMAND,
             'terminalWebSocketUrl' => config('services.terminal.websocket_url'),
-            'terminalWebSocketTicket' => $this->makeWebSocketTicket($terminalSession, $user),
+            'terminalWebSocketTicket' => $terminalAccessError ? null : $this->makeWebSocketTicket($terminalSession, $user),
+            'terminalAccessError' => $terminalAccessError,
         ]);
     }
 
-    public function executeCommand(Request $request, TerminalSession $terminalSession, SshCommandService $sshCommandService): RedirectResponse
+    public function executeCommand(Request $request, TerminalSession $terminalSession, SshCommandService $sshCommandService, SshReadinessService $sshReadiness): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
         abort_unless($user, 403, 'Anda tidak memiliki akses ke VM ini.');
@@ -107,6 +133,7 @@ class TerminalSessionController extends Controller
 
         // Cegah sesi revoked/expired tetap mengeksekusi command melalui request lama.
         $terminalSession->expireIfPastDue();
+        $this->refreshSshReadiness($terminalSession, $sshReadiness);
 
         $command = trim((string) $request->input('command', self::DEFAULT_TEST_COMMAND));
         $command = $command !== '' ? $command : self::DEFAULT_TEST_COMMAND;
@@ -130,6 +157,14 @@ class TerminalSessionController extends Controller
             return back()->with('error', $authorization->message() ?: 'Command diblokir oleh policy terminal.');
         }
 
+        if ($blockedReason = $this->terminalTargetBlockedReason($terminalSession)) {
+            $commandLog = $this->createCommandLog($terminalSession, $user, $command);
+            $commandLog->markBlocked($blockedReason);
+            $this->touchActivityWhenOpen($terminalSession);
+
+            return back()->with('error', $blockedReason);
+        }
+
         $commandLog = $this->createCommandLog($terminalSession, $user, $command);
 
         if ($terminalSession->isPending()) {
@@ -147,7 +182,7 @@ class TerminalSessionController extends Controller
         try {
             // Eksekusi SSH selalu melewati service agar logging dan sanitasi output tetap konsisten.
             $result = $sshCommandService->execute($terminalSession, $command);
-            $outputExcerpt = $this->outputExcerpt($result->output ?: $result->error ?: 'SSH command execution failed.');
+            $outputExcerpt = $this->outputExcerpt($result->output ?: $result->error ?: 'SSH command execution failed.', $terminalSession);
 
             $result->successful
                 ? $commandLog->markSucceeded($result->exitCode, $result->durationMs, $outputExcerpt)
@@ -237,36 +272,115 @@ class TerminalSessionController extends Controller
         ], JSON_THROW_ON_ERROR));
     }
 
-    private function targetHostFor(Vm $vm): string
+    private function targetHostFor(Vm $vm): ?string
     {
-        return (string) (
-            $vm->metadata['target_host']
-            ?? $vm->metadata['ssh_host']
-            ?? $vm->metadata['ip']
-            ?? $vm->metadata['ip_address']
-            ?? config('services.terminal.target_host')
-            ?? $vm->node
-        );
+        return $vm->sshHost()
+            ?? ($vm->isProvisionedStudentVm()
+                ? null
+                : $this->configuredStaticTargetHost($vm));
+    }
+
+    private function detectAndStoreGuestIp(Vm $vm, ProxmoxService $proxmox): ?string
+    {
+        if (! $vm->isProvisionedStudentVm()) {
+            return null;
+        }
+
+        $vmid = $vm->proxmoxVmid();
+
+        if ($vmid === null) {
+            return null;
+        }
+
+        $ip = $proxmox->detectGuestIpv4($vm->node, $vmid);
+
+        if ($ip === null) {
+            return null;
+        }
+
+        $vm->forceFill([
+            'metadata' => [
+                ...($vm->metadata ?? []),
+                'ssh_host' => $ip,
+                'ip_address' => $ip,
+            ],
+        ])->save();
+
+        return $ip;
     }
 
     private function targetPortFor(Vm $vm): int
     {
         return (int) (
-            $vm->metadata['target_port']
-            ?? $vm->metadata['ssh_port']
-            ?? config('services.terminal.target_port')
-            ?? 22
+            $vm->sshPort()
         );
     }
 
     private function targetUsernameFor(Vm $vm): string
     {
         return (string) (
-            $vm->metadata['target_username']
-            ?? $vm->metadata['ssh_username']
-            ?? config('services.terminal.target_username')
-            ?? 'student'
+            $vm->sshUsername()
         );
+    }
+
+    private function configuredStaticTargetHost(Vm $vm): ?string
+    {
+        $host = config('services.terminal.target_host') ?: $vm->node;
+
+        return is_string($host) && trim($host) !== '' ? trim($host) : null;
+    }
+
+    private function terminalTargetBlockedReason(TerminalSession $terminalSession): ?string
+    {
+        $terminalSession->loadMissing('vm');
+
+        if (! $terminalSession->vm || $terminalSession->vm->trashed()) {
+            return 'VM is no longer available for terminal access.';
+        }
+
+        if ($terminalSession->vm->status !== 'running') {
+            return 'Start this VM before opening terminal access.';
+        }
+
+        if (! is_string($terminalSession->ssh_host) || trim($terminalSession->ssh_host) === '') {
+            return 'SSH access for this VM is not configured yet.';
+        }
+
+        if (($terminalSession->metadata['ssh_ready'] ?? null) === false) {
+            return 'SSH is still starting inside this VM. Please wait a moment, then refresh this terminal session.';
+        }
+
+        return null;
+    }
+
+    private function refreshSshReadiness(TerminalSession $terminalSession, SshReadinessService $sshReadiness): bool
+    {
+        if ($terminalSession->isEnded() || $terminalSession->isExpired()) {
+            return false;
+        }
+
+        if (! array_key_exists('ssh_ready', $terminalSession->metadata ?? [])) {
+            return true;
+        }
+
+        if (($terminalSession->metadata['ssh_ready'] ?? false) === true) {
+            return true;
+        }
+
+        if (! is_string($terminalSession->ssh_host) || trim($terminalSession->ssh_host) === '' || $terminalSession->ssh_port < 1) {
+            return false;
+        }
+
+        $ready = $sshReadiness->waitUntilReachable($terminalSession->ssh_host, $terminalSession->ssh_port);
+
+        $terminalSession->forceFill([
+            'metadata' => [
+                ...($terminalSession->metadata ?? []),
+                'ssh_ready' => $ready,
+            ],
+        ])->save();
+
+        return $ready;
     }
 
     private function resolveDashboardUser(Request $request): ?User
@@ -321,7 +435,7 @@ class TerminalSessionController extends Controller
         ]);
     }
 
-    private function outputExcerpt(string $output): string
+    private function outputExcerpt(string $output, ?TerminalSession $terminalSession = null): string
     {
         $password = config('services.terminal.ssh_password');
         $excerpt = str($output)
@@ -329,9 +443,13 @@ class TerminalSessionController extends Controller
             ->limit(self::OUTPUT_EXCERPT_LIMIT, "\n[output truncated]")
             ->toString();
 
-        if (is_string($password) && $password !== '') {
+        foreach ([$password, $terminalSession?->vm?->sshPassword(), $terminalSession?->vm?->sshPrivateKey()] as $secret) {
+            if (! is_string($secret) || $secret === '') {
+                continue;
+            }
+
             // Jangan pernah menampilkan secret SSH pada dashboard SOC atau riwayat command.
-            $excerpt = str_replace($password, '[redacted]', $excerpt);
+            $excerpt = str_replace($secret, '[redacted]', $excerpt);
         }
 
         return $excerpt;

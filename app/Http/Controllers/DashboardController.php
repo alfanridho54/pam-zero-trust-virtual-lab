@@ -10,6 +10,7 @@ use App\Models\LabTemplate;
 use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
+use App\Models\VmTemplate;
 use App\Services\ProxmoxService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -99,6 +100,101 @@ class DashboardController extends Controller
         return back()->with('status', 'VM berhasil di-soft delete.');
     }
 
+    public function updateVmSshMetadata(Request $request, Vm $vm): RedirectResponse
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses ke konfigurasi SSH VM.');
+
+        $data = $request->validate([
+            'ssh_host' => ['nullable', 'string', 'max:255'],
+            'ip_address' => ['nullable', 'string', 'max:255'],
+            'private_ip' => ['nullable', 'string', 'max:255'],
+            'public_ip' => ['nullable', 'string', 'max:255'],
+            'ssh_port' => ['nullable', 'integer', 'min:1', 'max:65535'],
+            'ssh_username' => ['nullable', 'string', 'max:255'],
+            'ssh_password' => ['nullable', 'string', 'max:4096'],
+            'ssh_private_key' => ['nullable', 'string', 'max:20000'],
+        ]);
+
+        $metadata = $vm->metadata ?? [];
+
+        foreach (['ssh_host', 'ip_address', 'private_ip', 'public_ip', 'ssh_port', 'ssh_username', 'ssh_password', 'ssh_private_key'] as $key) {
+            if (! $request->has($key)) {
+                continue;
+            }
+
+            $value = $data[$key] ?? null;
+
+            if (is_string($value)) {
+                $value = trim($value);
+            }
+
+            if ($value === null || $value === '') {
+                if (in_array($key, ['ssh_password', 'ssh_private_key'], true)) {
+                    continue;
+                }
+
+                unset($metadata[$key]);
+
+                continue;
+            }
+
+            $metadata[$key] = $value;
+        }
+
+        $vm->update(['metadata' => $metadata]);
+
+        $this->audit($user?->id, $vm->id, 'dashboard.vm.ssh_metadata.updated', 'Dashboard memperbarui metadata SSH VM.', [
+            'updated_keys' => array_keys($data),
+            'ssh_host_configured' => $vm->refresh()->hasSshMetadata(),
+            'secrets_updated' => [
+                'ssh_password' => $request->filled('ssh_password'),
+                'ssh_private_key' => $request->filled('ssh_private_key'),
+            ],
+        ]);
+
+        return back()->with('status', 'SSH metadata VM berhasil diperbarui.');
+    }
+
+    public function refreshVmSshMetadata(Request $request, Vm $vm): RedirectResponse
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses ke konfigurasi SSH VM.');
+
+        $vmid = $vm->proxmoxVmid();
+
+        if ($vmid === null) {
+            return back()->with('error', 'VM belum memiliki VMID Proxmox.');
+        }
+
+        $ip = $this->proxmox->detectGuestIpv4($vm->node, $vmid);
+
+        if ($ip === null) {
+            $this->audit($user?->id, $vm->id, 'dashboard.vm.ssh_metadata.refresh.failed', 'Dashboard gagal mendeteksi IP SSH VM.', [
+                'node' => $vm->node,
+                'vmid' => $vmid,
+            ]);
+
+            return back()->with('error', 'IP SSH belum terdeteksi dari guest agent.');
+        }
+
+        $vm->forceFill([
+            'metadata' => [
+                ...($vm->metadata ?? []),
+                'ssh_host' => $ip,
+                'ip_address' => $ip,
+            ],
+        ])->save();
+
+        $this->audit($user?->id, $vm->id, 'dashboard.vm.ssh_metadata.refresh.success', 'Dashboard mendeteksi IP SSH VM dari guest agent.', [
+            'node' => $vm->node,
+            'vmid' => $vmid,
+            'ssh_host_configured' => true,
+        ]);
+
+        return back()->with('status', 'SSH metadata VM berhasil direfresh.');
+    }
+
     public function proxmoxVmAction(Request $request, string $node, string $vmid, string $action): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
@@ -173,7 +269,7 @@ class DashboardController extends Controller
     private function view(string $section): View
     {
         $user = $this->resolveDashboardUser(request());
-        $localVms = Vm::query()->with(['user', 'labTemplate'])->latest()->get();
+        $localVms = Vm::query()->with(['user', 'labTemplate', 'vmTemplate'])->latest()->get();
         $visibleLocalVms = $this->localVmsForUser($user);
         $realVmResponse = $this->proxmox->listVms();
         $realVms = collect($realVmResponse['data'] ?? [])
@@ -182,16 +278,22 @@ class DashboardController extends Controller
             ->filter(fn (array $vm) => $vm['can_view'])
             ->filter(fn (array $vm) => $this->roleFor($user) !== 'student' || (! $vm['is_system_vm'] && ! $vm['is_critical']))
             ->values();
-        $canViewPamMonitoring = $this->roleFor($user) === 'admin';
+        $role = $this->roleFor($user);
+        $canViewPamMonitoring = $role === 'admin';
+        $vmTemplates = VmTemplate::query()
+            ->when($role === 'student', fn ($query) => $query->enabled())
+            ->orderBy('name')
+            ->get();
 
         // Data SOC dipasang hanya saat admin melihat dashboard agar telemetry PAM tidak bocor ke siswa.
         $data = [
             'section' => $section,
             'currentUser' => $user,
-            'templates' => LabTemplate::query()->latest()->get(),
+            'templates' => $vmTemplates,
             'vms' => $visibleLocalVms,
             'realVmResponse' => $realVmResponse,
             'realVms' => $realVms,
+            'vmTemplates' => $vmTemplates,
             'auditLogs' => AuditLog::with(['user', 'vm'])->latest()->limit(50)->get(),
             'canViewPamMonitoring' => $canViewPamMonitoring,
             'recentCommandLogs' => $canViewPamMonitoring ? $this->recentCommandLogs() : collect(),
@@ -199,7 +301,7 @@ class DashboardController extends Controller
             'blockedCommandLogs' => $canViewPamMonitoring ? $this->blockedCommandLogs() : collect(),
             'terminalActivityTimeline' => $canViewPamMonitoring ? $this->terminalActivityTimeline() : collect(),
             'stats' => [
-                'templates' => LabTemplate::count(),
+                'templates' => VmTemplate::count(),
                 'vms' => $realVms->isNotEmpty() ? $realVms->count() : $visibleLocalVms->count(),
                 'auditLogs' => AuditLog::count(),
                 'users' => User::count(),
@@ -224,7 +326,7 @@ class DashboardController extends Controller
     private function localVmsForUser(?User $user): Collection
     {
         $query = Vm::withTrashed()
-            ->with(['user', 'labTemplate'])
+            ->with(['user', 'labTemplate', 'vmTemplate'])
             ->latest();
 
         // Isolasi VM lokal: siswa hanya melihat resource miliknya, admin/guru untuk supervisi.
@@ -379,7 +481,7 @@ class DashboardController extends Controller
             'status_class' => $this->commandStatusBadgeClass($log->status->value),
             'blocked_reason' => $log->blocked_reason,
             'executed_at' => $log->executed_at ?? $log->created_at,
-            'output_excerpt' => $this->safeCommandOutputExcerpt($log->output_excerpt),
+            'output_excerpt' => $this->safeCommandOutputExcerpt($log),
         ];
     }
 
@@ -425,8 +527,10 @@ class DashboardController extends Controller
         };
     }
 
-    private function safeCommandOutputExcerpt(?string $output): ?string
+    private function safeCommandOutputExcerpt(CommandLog $log): ?string
     {
+        $output = $log->output_excerpt;
+
         if ($output === null || $output === '') {
             return null;
         }
@@ -437,9 +541,13 @@ class DashboardController extends Controller
             ->toString();
         $sshPassword = config('services.terminal.ssh_password');
 
-        if (is_string($sshPassword) && $sshPassword !== '') {
+        foreach ([$sshPassword, $log->vm?->sshPassword(), $log->vm?->sshPrivateKey()] as $secret) {
+            if (! is_string($secret) || $secret === '') {
+                continue;
+            }
+
             // Output SOC tidak boleh membocorkan password SSH yang mungkin ikut tercetak command.
-            $excerpt = str_replace($sshPassword, '[redacted]', $excerpt);
+            $excerpt = str_replace($secret, '[redacted]', $excerpt);
         }
 
         return $excerpt;
@@ -592,7 +700,20 @@ class DashboardController extends Controller
             'vm_id' => $vmId,
             'action' => $action,
             'description' => $description,
-            'metadata' => ['source' => 'web-dashboard', ...$metadata],
+            'metadata' => ['source' => 'web-dashboard', ...$this->redactSensitiveMetadata($metadata)],
         ]);
+    }
+
+    private function redactSensitiveMetadata(array $metadata): array
+    {
+        foreach ($metadata as $key => $value) {
+            if (in_array($key, ['ssh_password', 'ssh_private_key'], true)) {
+                $metadata[$key] = '[redacted]';
+            } elseif (is_array($value)) {
+                $metadata[$key] = $this->redactSensitiveMetadata($value);
+            }
+        }
+
+        return $metadata;
     }
 }

@@ -28,8 +28,8 @@ class TerminalWebSocketCommandService
             return new TerminalWebSocketCommandResult('ignored', '', null, '');
         }
 
-        $terminalSession->refresh();
-        $terminalSession->load('vm');
+        $terminalSession = $terminalSession->fresh('vm') ?? $terminalSession;
+        $terminalSession->loadMissing('vm');
         // Refresh status sebelum eksekusi agar revoke/expire dari dashboard langsung berlaku di WebSocket.
         $terminalSession->expireIfPastDue();
 
@@ -49,6 +49,10 @@ class TerminalWebSocketCommandService
             );
         }
 
+        if ($blockedReason = $this->terminalTargetBlockedReason($terminalSession)) {
+            return $this->blocked($terminalSession, $user, $command, $blockedReason);
+        }
+
         if ($terminalSession->isPending()) {
             // Sesi terminal dianggap aktif hanya setelah command pertama yang lolos policy.
             $terminalSession->forceFill([
@@ -66,7 +70,7 @@ class TerminalWebSocketCommandService
         try {
             // WebSocket hanya transport; eksekusi tetap lewat SSH service agar audit flow seragam.
             $result = $this->sshCommandService->execute($terminalSession, $command);
-            $outputExcerpt = $this->outputExcerpt($result->output ?: $result->error ?: 'SSH command execution failed.');
+            $outputExcerpt = $this->outputExcerpt($result->output ?: $result->error ?: 'SSH command execution failed.', $terminalSession);
 
             $result->successful
                 ? $commandLog->markSucceeded($result->exitCode, $result->durationMs, $outputExcerpt)
@@ -118,14 +122,37 @@ class TerminalWebSocketCommandService
         ]);
     }
 
-    private function outputExcerpt(string $output): string
+    private function terminalTargetBlockedReason(TerminalSession $terminalSession): ?string
+    {
+        $terminalSession->loadMissing('vm');
+
+        if (! $terminalSession->vm || $terminalSession->vm->trashed()) {
+            return 'VM is no longer available for terminal access.';
+        }
+
+        if ($terminalSession->vm->status !== 'running') {
+            return 'Start this VM before opening terminal access.';
+        }
+
+        if (! is_string($terminalSession->ssh_host) || trim($terminalSession->ssh_host) === '') {
+            return 'SSH access for this VM is not configured yet.';
+        }
+
+        return null;
+    }
+
+    private function outputExcerpt(string $output, ?TerminalSession $terminalSession = null): string
     {
         $password = config('services.terminal.ssh_password');
         $excerpt = str($output)->replace("\0", '')->limit(self::OUTPUT_EXCERPT_LIMIT, "\n[output truncated]")->toString();
 
-        if (is_string($password) && $password !== '') {
+        foreach ([$password, $terminalSession?->vm?->sshPassword(), $terminalSession?->vm?->sshPrivateKey()] as $secret) {
+            if (! is_string($secret) || $secret === '') {
+                continue;
+            }
+
             // Redaksi secret menjaga output terminal aman saat ditampilkan di dashboard.
-            $excerpt = str_replace($password, '[redacted]', $excerpt);
+            $excerpt = str_replace($secret, '[redacted]', $excerpt);
         }
 
         return $excerpt;

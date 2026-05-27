@@ -35,6 +35,9 @@
         <env name="PROXMOX_NODE" value="pve-mock"/>
         <env name="PROXMOX_TOKEN_ID" value=""/>
         <env name="PROXMOX_TOKEN_SECRET" value=""/>
+        <env name="TERMINAL_SSH_READY_ATTEMPTS" value="1"/>
+        <env name="TERMINAL_SSH_READY_DELAY_MS" value="0"/>
+        <env name="TERMINAL_SSH_READY_TIMEOUT" value="0.01"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>

@@ -55,6 +55,61 @@ class TerminalWebSocketCommandTest extends TestCase
         ]);
     }
 
+    public function test_dynamic_vm_websocket_command_uses_vm_metadata_password(): void
+    {
+        config(['services.terminal.ssh_password' => 'wrong-config-password']);
+
+        $user = $this->student();
+        $terminalSession = $this->terminalSessionFor($user, [
+            'status' => TerminalSessionStatus::Active,
+            'ssh_username' => 'stale-session-user',
+            'ssh_port' => 22,
+        ], [
+            'provisioning' => 'template-clone',
+            'ssh_username' => 'metadata-user',
+            'ssh_password' => 'metadata-secret',
+            'ssh_port' => 2222,
+        ]);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                $summary = $this->safeConnectionSummary($terminalSession);
+
+                if (
+                    $summary['credential_source'] !== 'vm_metadata_password'
+                    || $summary['username'] !== 'metadata-user'
+                    || $summary['port'] !== 2222
+                ) {
+                    return new SshCommandResult(
+                        successful: false,
+                        exitCode: null,
+                        durationMs: 1,
+                        output: '',
+                        error: 'SSH authentication failed.',
+                    );
+                }
+
+                return new SshCommandResult(
+                    successful: true,
+                    exitCode: 0,
+                    durationMs: 12,
+                    output: "metadata-user\n",
+                );
+            }
+        });
+
+        $result = $this->app->make(TerminalWebSocketCommandService::class)
+            ->run($terminalSession, $user, 'whoami');
+
+        $this->assertSame('output', $result->type);
+        $this->assertSame(CommandLogStatus::Succeeded->value, $result->status);
+        $this->assertStringContainsString('metadata-user', $result->output);
+        $this->assertStringNotContainsString('metadata-secret', $result->output);
+        $this->assertStringNotContainsString('wrong-config-password', $result->output);
+    }
+
     public function test_revoked_session_cannot_run_websocket_command(): void
     {
         $user = $this->student();
@@ -120,7 +175,7 @@ class TerminalWebSocketCommandTest extends TestCase
         ]);
     }
 
-    private function terminalSessionFor(User $user, array $sessionAttributes = []): TerminalSession
+    private function terminalSessionFor(User $user, array $sessionAttributes = [], array $vmMetadata = []): TerminalSession
     {
         $vm = Vm::create([
             'user_id' => $user->id,
@@ -135,6 +190,7 @@ class TerminalWebSocketCommandTest extends TestCase
                 'ssh_host' => '127.0.0.1',
                 'ssh_port' => 22,
                 'ssh_username' => 'student',
+                ...$vmMetadata,
             ],
         ]);
 

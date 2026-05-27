@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\AuditLog;
 use App\Models\User;
 use App\Models\Vm;
+use App\Models\VmTemplate;
 use App\Services\ProxmoxService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -39,6 +40,7 @@ class StudentVmController extends Controller
             'currentUser' => $user,
             'vms' => $vms,
             'maxStudentVms' => $this->maxStudentVms($user),
+            'vmTemplates' => VmTemplate::query()->enabled()->orderBy('name')->get(),
         ]);
     }
 
@@ -54,13 +56,20 @@ class StudentVmController extends Controller
                 'max:64',
                 'regex:/^[A-Za-z0-9][A-Za-z0-9._ -]*[A-Za-z0-9]$/',
             ],
+            'vm_template_id' => [
+                'required',
+                'integer',
+                Rule::exists('vm_templates', 'id')->where('enabled', true),
+            ],
         ]);
+
+        $template = VmTemplate::query()->enabled()->findOrFail($data['vm_template_id']);
 
         if ($this->studentQuotaVmCount($user) >= $this->maxStudentVms($user)) {
             return back()->withInput()->with('error', 'Kuota VM student sudah penuh.');
         }
 
-        $clone = $this->proxmox->cloneStudentVmFromTemplate($data['name']);
+        $clone = $this->proxmox->cloneStudentVmFromVmTemplate($template, $data['name']);
 
         if (! ($clone['success'] ?? false)) {
             $this->audit($user, null, 'student.vm.create.failed', 'Clone VM student dari template gagal.', [
@@ -74,17 +83,21 @@ class StudentVmController extends Controller
         try {
             $vm = DB::transaction(fn () => $user->vms()->create([
                 'name' => $data['name'],
+                'vm_template_id' => $template->id,
                 'proxmox_id' => (string) $clone['proxmox_id'],
                 'node' => $clone['node'],
                 'status' => $clone['local_status'] ?? 'stopped',
-                'cpu_cores' => 1,
-                'memory_mb' => 1024,
-                'disk_gb' => 10,
+                'cpu_cores' => $template->cpu,
+                'memory_mb' => $template->ram,
+                'disk_gb' => $template->disk,
                 'metadata' => [
                     'vmid' => $clone['vmid'] ?? null,
+                    'source_vm_template_id' => $template->id,
                     'source_template_vmid' => $clone['source_template_vmid'] ?? null,
                     'provisioning' => 'template-clone',
                     'task_upid' => $clone['task_upid'] ?? null,
+                    ...$template->sshMetadata(),
+                    ...$this->sshMetadataFrom($clone),
                 ],
             ]));
         } catch (Throwable $exception) {
@@ -97,11 +110,19 @@ class StudentVmController extends Controller
             return back()->withInput()->with('error', 'Create VM gagal setelah Proxmox menerima clone. Admin perlu rekonsiliasi VMID '.($clone['vmid'] ?? '-').'.');
         }
 
+        $ipDetected = $this->detectAndStoreSshMetadata($vm, $template);
+
         $this->audit($user, $vm, 'student.vm.created', 'Student membuat VM dari template Proxmox.', [
-            'proxmox' => $clone,
+            'proxmox' => $this->redactSensitiveMetadata($clone),
+            'vm_template_id' => $template->id,
+            'guest_ipv4_detected' => $ipDetected,
         ]);
 
-        return redirect()->route('student.vms.index')->with('status', 'VM berhasil dibuat dari template.');
+        $status = $ipDetected
+            ? 'VM berhasil dibuat dari template dan IP SSH terdeteksi.'
+            : 'VM berhasil dibuat dari template. IP SSH akan tersedia setelah guest agent siap.';
+
+        return redirect()->route('student.vms.index')->with('status', $status);
     }
 
     public function action(Request $request, Vm $vm, string $action): RedirectResponse
@@ -142,6 +163,10 @@ class StudentVmController extends Controller
             $vm->update([
                 'status' => $action === 'start' ? 'running' : 'stopped',
             ]);
+
+            if ($action === 'start') {
+                $this->detectAndStoreSshMetadata($vm->refresh(), $vm->vmTemplate);
+            }
         }
 
         $this->audit($user, $vm, 'student.vm.'.$action.(($response['success'] ?? false) ? '.success' : '.failed'), 'Student menjalankan lifecycle action VM.', [
@@ -286,7 +311,78 @@ class StudentVmController extends Controller
             'vm_id' => $vm?->id,
             'action' => $action,
             'description' => $description,
-            'metadata' => ['source' => 'student-self-service', ...$metadata],
+            'metadata' => ['source' => 'student-self-service', ...$this->redactSensitiveMetadata($metadata)],
         ]);
+    }
+
+    private function detectAndStoreSshMetadata(Vm $vm, ?VmTemplate $template = null): bool
+    {
+        if ($vm->status !== 'running') {
+            return false;
+        }
+
+        $vmid = $vm->proxmoxVmid();
+
+        if ($vmid === null) {
+            return false;
+        }
+
+        $ip = $this->proxmox->detectGuestIpv4($vm->node, $vmid);
+
+        if ($ip === null) {
+            return false;
+        }
+
+        $metadata = $vm->metadata ?? [];
+        $metadata['ssh_host'] = $ip;
+        $metadata['ip_address'] = $ip;
+        $metadata['ssh_port'] = 22;
+        $metadata['ssh_username'] = $template?->ssh_username ?: ($metadata['ssh_username'] ?? 'student');
+
+        if (is_string($template?->ssh_password) && $template->ssh_password !== '') {
+            $metadata['ssh_password'] = $template->ssh_password;
+        }
+
+        $vm->forceFill(['metadata' => $metadata])->save();
+
+        return true;
+    }
+
+    private function sshMetadataFrom(array $source): array
+    {
+        $metadata = [];
+
+        foreach (['ssh_host', 'ssh_port', 'ssh_username', 'ssh_password', 'ssh_private_key', 'ip_address', 'private_ip', 'public_ip'] as $key) {
+            if (! array_key_exists($key, $source)) {
+                continue;
+            }
+
+            $value = $source[$key];
+
+            if (is_string($value)) {
+                $value = trim($value);
+            }
+
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            $metadata[$key] = $value;
+        }
+
+        return $metadata;
+    }
+
+    private function redactSensitiveMetadata(array $metadata): array
+    {
+        foreach ($metadata as $key => $value) {
+            if (in_array($key, ['ssh_password', 'ssh_private_key'], true)) {
+                $metadata[$key] = '[redacted]';
+            } elseif (is_array($value)) {
+                $metadata[$key] = $this->redactSensitiveMetadata($value);
+            }
+        }
+
+        return $metadata;
     }
 }

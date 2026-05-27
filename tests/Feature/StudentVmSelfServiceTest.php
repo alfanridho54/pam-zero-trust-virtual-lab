@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\AuditLog;
 use App\Models\User;
 use App\Models\Vm;
+use App\Models\VmTemplate;
 use App\Services\ProxmoxService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -117,6 +118,7 @@ class StudentVmSelfServiceTest extends TestCase
         $this->actingAs($student)
             ->post(route('student.vms.store'), [
                 'name' => 'Allowed Normal VM',
+                'vm_template_id' => $this->enabledTemplate()->id,
             ])
             ->assertRedirect(route('student.vms.index'))
             ->assertSessionHas('status');
@@ -167,6 +169,7 @@ class StudentVmSelfServiceTest extends TestCase
         $this->actingAs($student)
             ->post(route('student.vms.store'), [
                 'name' => 'Extra Student VM',
+                'vm_template_id' => $this->enabledTemplate()->id,
             ])
             ->assertRedirect()
             ->assertSessionHas('error');
@@ -232,6 +235,7 @@ class StudentVmSelfServiceTest extends TestCase
         $this->actingAs($student)
             ->post(route('student.vms.store'), [
                 'name' => 'Template Clone VM',
+                'vm_template_id' => $this->enabledTemplate(['proxmox_template_id' => 9100])->id,
             ])
             ->assertRedirect(route('student.vms.index'))
             ->assertSessionHas('status');
@@ -241,6 +245,7 @@ class StudentVmSelfServiceTest extends TestCase
             ->firstOrFail();
 
         $this->assertSame(9100, $vm->metadata['source_template_vmid']);
+        $this->assertNotNull($vm->vm_template_id);
 
         $this->assertDatabaseHas('audit_logs', [
             'user_id' => $student->id,
@@ -261,7 +266,7 @@ class StudentVmSelfServiceTest extends TestCase
             {
             }
 
-            public function cloneStudentVmFromTemplate(string $vmName): array
+            public function cloneStudentVmFromVmTemplate(VmTemplate $template, string $vmName): array
             {
                 return [
                     'success' => false,
@@ -274,6 +279,7 @@ class StudentVmSelfServiceTest extends TestCase
         $this->actingAs($student)
             ->post(route('student.vms.store'), [
                 'name' => 'Denied Clone VM',
+                'vm_template_id' => $this->enabledTemplate()->id,
             ])
             ->assertRedirect()
             ->assertSessionHas('error');
@@ -304,7 +310,7 @@ class StudentVmSelfServiceTest extends TestCase
             {
             }
 
-            public function cloneStudentVmFromTemplate(string $vmName): array
+            public function cloneStudentVmFromVmTemplate(VmTemplate $template, string $vmName): array
             {
                 return [
                     'success' => true,
@@ -325,6 +331,7 @@ class StudentVmSelfServiceTest extends TestCase
         $this->actingAs($student)
             ->post(route('student.vms.store'), [
                 'name' => 'Duplicate Local Save VM',
+                'vm_template_id' => $this->enabledTemplate()->id,
             ])
             ->assertRedirect()
             ->assertSessionHas('error');
@@ -425,6 +432,28 @@ class StudentVmSelfServiceTest extends TestCase
             'memory_mb' => 1024,
             'disk_gb' => 10,
             'metadata' => $metadata + ['vmid' => $vmid],
+        ]);
+    }
+
+    private function enabledTemplate(array $attributes = []): VmTemplate
+    {
+        $template = VmTemplate::query()->enabled()->first();
+
+        if ($template && $attributes === []) {
+            return $template;
+        }
+
+        return VmTemplate::create([
+            'name' => 'Feature Test Template '.str()->random(6),
+            'description' => 'Template for feature tests.',
+            'proxmox_template_id' => 9100,
+            'proxmox_node' => 'pve-mock',
+            'cpu' => 1,
+            'ram' => 1024,
+            'disk' => 10,
+            'ssh_username' => 'student',
+            'enabled' => true,
+            ...$attributes,
         ]);
     }
 }

@@ -17,6 +17,7 @@ class Vm extends Model
     protected $fillable = [
         'user_id',
         'lab_template_id',
+        'vm_template_id',
         'name',
         'proxmox_id',
         'node',
@@ -59,6 +60,11 @@ class Vm extends Model
         return $this->belongsTo(LabTemplate::class);
     }
 
+    public function vmTemplate(): BelongsTo
+    {
+        return $this->belongsTo(VmTemplate::class);
+    }
+
     public function terminalSessions(): HasMany
     {
         return $this->hasMany(TerminalSession::class);
@@ -76,7 +82,7 @@ class Vm extends Model
             return (int) $this->proxmox_id;
         }
 
-        $metadataVmid = $this->metadata['vmid'] ?? null;
+        $metadataVmid = $this->sshMetadataArray()['vmid'] ?? null;
 
         if (is_numeric($metadataVmid)) {
             return (int) $metadataVmid;
@@ -114,6 +120,84 @@ class Vm extends Model
         return $this->isSystemVm() || $this->isCriticalVm() || $this->metadataFlag('protected');
     }
 
+    public function isProvisionedStudentVm(): bool
+    {
+        $metadata = $this->sshMetadataArray();
+
+        return in_array($metadata['provisioning'] ?? null, ['template-clone', 'student-self-service'], true)
+            || array_key_exists('source_template_vmid', $metadata)
+            || array_key_exists('task_upid', $metadata);
+    }
+
+    public function sshHost(): ?string
+    {
+        $metadata = $this->sshMetadataArray();
+        $host = $this->localSshAttribute('ssh_host')
+            ?? $this->localSshAttribute('ip_address')
+            ?? $this->localSshAttribute('private_ip')
+            ?? $this->localSshAttribute('public_ip')
+            ?? $metadata['target_host']
+            ?? $metadata['ssh_host']
+            ?? $metadata['ip']
+            ?? $metadata['ip_address']
+            ?? $metadata['private_ip']
+            ?? $metadata['public_ip']
+            ?? null;
+
+        return is_string($host) && trim($host) !== '' ? trim($host) : null;
+    }
+
+    public function sshPort(): int
+    {
+        $metadata = $this->sshMetadataArray();
+
+        return (int) (
+            $this->localSshAttribute('ssh_port')
+            ?? $metadata['target_port']
+            ?? $metadata['ssh_port']
+            ?? config('services.terminal.target_port')
+            ?? 22
+        );
+    }
+
+    public function sshUsername(): string
+    {
+        $metadata = $this->sshMetadataArray();
+
+        return (string) (
+            $this->localSshAttribute('ssh_username')
+            ?? $metadata['target_username']
+            ?? $metadata['ssh_username']
+            ?? config('services.terminal.target_username')
+            ?? 'student'
+        );
+    }
+
+    public function sshPassword(): ?string
+    {
+        $metadata = $this->sshMetadataArray();
+        $password = $this->localSshAttribute('ssh_password')
+            ?? $metadata['ssh_password']
+            ?? null;
+
+        return is_string($password) && $password !== '' ? $password : null;
+    }
+
+    public function sshPrivateKey(): ?string
+    {
+        $metadata = $this->sshMetadataArray();
+        $privateKey = $this->localSshAttribute('ssh_private_key')
+            ?? $metadata['ssh_private_key']
+            ?? null;
+
+        return is_string($privateKey) && $privateKey !== '' ? $privateKey : null;
+    }
+
+    public function hasSshMetadata(): bool
+    {
+        return $this->sshHost() !== null;
+    }
+
     public function isStudentVisible(): bool
     {
         return ! $this->trashed() && ! $this->isSystemVm() && ! $this->isCritical();
@@ -126,7 +210,12 @@ class Vm extends Model
 
     private function metadataFlag(string $key): bool
     {
-        return filter_var($this->metadata[$key] ?? false, FILTER_VALIDATE_BOOLEAN);
+        return filter_var($this->sshMetadataArray()[$key] ?? false, FILTER_VALIDATE_BOOLEAN);
+    }
+
+    private function localSshAttribute(string $key): mixed
+    {
+        return array_key_exists($key, $this->attributes) ? $this->getAttribute($key) : null;
     }
 
     private function hasInfrastructureVmid(): bool
@@ -134,5 +223,10 @@ class Vm extends Model
         $vmid = $this->proxmoxVmid();
 
         return $vmid !== null && in_array($vmid, self::INFRASTRUCTURE_VMIDS, true);
+    }
+
+    private function sshMetadataArray(): array
+    {
+        return is_array($this->metadata) ? $this->metadata : [];
     }
 }

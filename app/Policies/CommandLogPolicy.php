@@ -57,6 +57,12 @@ class CommandLogPolicy
             return false;
         }
 
+        $vm = $terminalSession->vm;
+
+        if (! $vm || $vm->trashed()) {
+            return false;
+        }
+
         if ($user->role === 'admin') {
             return true;
         }
@@ -69,20 +75,11 @@ class CommandLogPolicy
         // Siswa harus menjadi pemilik session sekaligus pemilik VM target.
         return in_array($user->role, ['student', 'mahasiswa'], true)
             && $terminalSession->user_id === $user->id
-            && $terminalSession->vm?->user_id === $user->id;
+            && $vm->user_id === $user->id;
     }
 
     private function protectedVm(TerminalSession $terminalSession): bool
     {
-        $metadata = $terminalSession->vm?->metadata ?? [];
-
-        // Metadata VM menjadi saklar proteksi untuk aset system, critical, atau protected.
-        foreach (['system_vm', 'critical', 'protected'] as $key) {
-            if (filter_var($metadata[$key] ?? false, FILTER_VALIDATE_BOOLEAN)) {
-                return true;
-            }
-        }
-
-        return false;
+        return $terminalSession->vm?->isProtectedVm() ?? true;
     }
 }

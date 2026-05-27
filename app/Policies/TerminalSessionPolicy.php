@@ -21,7 +21,7 @@ class TerminalSessionPolicy
 
     public function create(User $user, Vm $vm): Response
     {
-        if ($this->metadataFlag($vm, 'system_vm') || $this->metadataFlag($vm, 'critical')) {
+        if ($vm->isProtectedVm()) {
             // VM system/critical tidak boleh dibuka terminalnya dari lab student.
             return Response::deny('Terminal tidak tersedia untuk VM system atau critical.');
         }
@@ -48,8 +48,12 @@ class TerminalSessionPolicy
             : Response::deny('Terminal session tidak aktif.');
     }
 
-    private function canAccessVm(User $user, Vm $vm): bool
+    private function canAccessVm(User $user, ?Vm $vm): bool
     {
+        if (! $vm || $vm->trashed()) {
+            return false;
+        }
+
         // RBAC sederhana: admin/guru dapat supervisi, student dibatasi pada VM miliknya.
         if ($user->role === 'admin') {
             return true;
@@ -60,11 +64,7 @@ class TerminalSessionPolicy
             return true;
         }
 
-        return in_array($user->role, ['student', 'mahasiswa'], true) && $vm->user_id === $user->id;
-    }
-
-    private function metadataFlag(Vm $vm, string $key): bool
-    {
-        return filter_var($vm->metadata[$key] ?? false, FILTER_VALIDATE_BOOLEAN);
+        return in_array($user->role, ['student', 'mahasiswa'], true)
+            && $vm->user_id === $user->id;
     }
 }

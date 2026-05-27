@@ -8,6 +8,7 @@
     $prompt = $targetAddress;
     $subtitle = ($terminalSession->vm?->name ?? 'VM') . ' - interactive monitored terminal';
     $logs = $commandLogs ?? collect();
+    $accessError = $terminalAccessError ?? null;
     $statusClass = $terminalSession->isActive()
         ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
         : ($terminalSession->isEnded()
@@ -29,6 +30,12 @@
         @if ($expiresSoon)
             <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
                 Session expires in less than 5 minutes.
+            </div>
+        @endif
+
+        @if ($accessError)
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                {{ $accessError }}
             </div>
         @endif
 
@@ -92,7 +99,9 @@
                 <div id="ws-terminal" class="min-h-[28rem] bg-slate-950 p-5 font-mono text-sm leading-relaxed text-slate-100">
                     <div class="text-slate-400">Session {{ $terminalSession->session_uuid }}</div>
                     <div class="text-slate-500">{{ $targetEndpoint }}</div>
-                    @if (! $interactiveEnabled)
+                    @if ($accessError)
+                        <div class="mt-3 text-amber-300">{{ $accessError }}</div>
+                    @elseif (! $interactiveEnabled)
                         <div class="mt-3 text-amber-300">Interactive terminal is unavailable for ended, expired, revoked, or closed sessions.</div>
                     @else
                         <div class="mt-3 text-slate-500">Connecting to monitored WebSocket transport...</div>
@@ -148,10 +157,10 @@
                 <p class="text-sm text-slate-500">Use this if the WebSocket terminal is disconnected. Commands still use the same policy checks and command log.</p>
                 <form method="POST" action="{{ route('terminal-sessions.commands.store', $terminalSession) }}" class="mt-4 space-y-3">
                     @csrf
-                    <textarea name="command" rows="3" class="w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20" @disabled($terminalSession->isEnded())>{{ old('command', $defaultCommand ?? '') }}</textarea>
+                    <textarea name="command" rows="3" class="w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20" @disabled($terminalSession->isEnded() || $accessError)>{{ old('command', $defaultCommand ?? '') }}</textarea>
                     <div class="flex flex-wrap items-center justify-between gap-3">
                         <p class="text-xs text-slate-500">Blocked commands are recorded with status <span class="font-mono">blocked</span>.</p>
-                        <button class="inline-flex min-h-10 items-center rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50" type="submit" @disabled($terminalSession->isEnded())>
+                        <button class="inline-flex min-h-10 items-center rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50" type="submit" @disabled($terminalSession->isEnded() || $accessError)>
                             Run fallback command
                         </button>
                     </div>

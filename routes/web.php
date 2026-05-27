@@ -3,6 +3,7 @@
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\StudentVmController;
 use App\Http\Controllers\TerminalSessionController;
+use App\Http\Controllers\VmTemplateController;
 use App\Services\ProxmoxService;
 use Illuminate\Support\Facades\Route;
 
@@ -15,9 +16,14 @@ Route::get('/dashboard/templates', [DashboardController::class, 'templates'])->n
 Route::get('/dashboard/vms', [DashboardController::class, 'vms'])->name('dashboard.vms');
 Route::get('/dashboard/audit-logs', [DashboardController::class, 'auditLogs'])->name('dashboard.audit-logs');
 Route::get('/dashboard/soc', [DashboardController::class, 'socMonitoring'])->name('dashboard.soc');
+Route::post('/dashboard/vm-templates', [VmTemplateController::class, 'store'])->name('dashboard.vm-templates.store');
+Route::put('/dashboard/vm-templates/{vmTemplate}', [VmTemplateController::class, 'update'])->name('dashboard.vm-templates.update');
+Route::delete('/dashboard/vm-templates/{vmTemplate}', [VmTemplateController::class, 'destroy'])->name('dashboard.vm-templates.destroy');
 
 Route::post('/dashboard/simulate/docker-lab', [DashboardController::class, 'createDockerLab'])->name('dashboard.simulate.docker-lab');
 Route::post('/dashboard/simulate/vms/{vm}/resources', [DashboardController::class, 'editVmResource'])->name('dashboard.simulate.vm.resources');
+Route::post('/dashboard/vms/{vm}/ssh-metadata', [DashboardController::class, 'updateVmSshMetadata'])->name('dashboard.vms.ssh-metadata.update');
+Route::post('/dashboard/vms/{vm}/ssh-metadata/refresh', [DashboardController::class, 'refreshVmSshMetadata'])->name('dashboard.vms.ssh-metadata.refresh');
 Route::delete('/dashboard/simulate/vms/{vm}', [DashboardController::class, 'deleteVm'])->name('dashboard.simulate.vm.delete');
 Route::post('/dashboard/proxmox/vms/{node}/{vmid}/{action}', [DashboardController::class, 'proxmoxVmAction'])
     ->whereNumber('vmid')

@@ -9,7 +9,7 @@
 >
     <div class="space-y-6">
         <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <form method="POST" action="{{ route('student.vms.store') }}" class="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+            <form method="POST" action="{{ route('student.vms.store') }}" class="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(14rem,20rem)_auto] md:items-end">
                 @csrf
                 <div>
                     <label for="name" class="text-sm font-semibold text-slate-800">VM name</label>
@@ -26,10 +26,28 @@
                     @enderror
                     <p class="mt-2 text-xs text-slate-500">{{ $vms->count() }} of {{ $maxStudentVms }} VM quota used.</p>
                 </div>
+                <div>
+                    <label for="vm_template_id" class="text-sm font-semibold text-slate-800">Template</label>
+                    <select
+                        id="vm_template_id"
+                        name="vm_template_id"
+                        class="mt-2 min-h-10 w-full rounded-lg border border-slate-300 px-3 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    >
+                        <option value="">Select template</option>
+                        @foreach ($vmTemplates as $template)
+                            <option value="{{ $template->id }}" @selected((string) old('vm_template_id') === (string) $template->id)>
+                                {{ $template->name }} - {{ $template->cpu }} CPU / {{ $template->ram }} MB
+                            </option>
+                        @endforeach
+                    </select>
+                    @error('vm_template_id')
+                        <p class="mt-1 text-xs font-semibold text-red-600">{{ $message }}</p>
+                    @enderror
+                </div>
                 <button
                     type="submit"
                     class="inline-flex min-h-10 items-center justify-center rounded-lg bg-indigo-600 px-4 text-sm font-bold text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    @disabled($vms->count() >= $maxStudentVms)
+                    @disabled($vms->count() >= $maxStudentVms || $vmTemplates->isEmpty())
                 >
                     Create VM
                 </button>
@@ -84,6 +102,10 @@
                                         <form method="POST" action="{{ route('student.vms.action', [$vm, 'shutdown']) }}">
                                             @csrf
                                             <button type="submit" class="rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-200 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50" @disabled($protected || ! $running)>Shutdown</button>
+                                        </form>
+                                        <form method="POST" action="{{ route('terminal-sessions.store', $vm) }}">
+                                            @csrf
+                                            <button type="submit" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50" @disabled($protected)>Terminal</button>
                                         </form>
                                         <form method="POST" action="{{ route('student.vms.destroy', $vm) }}">
                                             @csrf

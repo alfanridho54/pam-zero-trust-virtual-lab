@@ -40,6 +40,28 @@
     @endif
 
     @if (in_array($section, ['overview', 'templates'], true))
+        @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
+            <x-card title="Create VM Template" subtitle="Proxmox template source for student self-service provisioning." class="mb-6">
+                <form method="POST" action="{{ route('dashboard.vm-templates.store') }}" class="grid gap-4 p-6 lg:grid-cols-4">
+                    @csrf
+                    <input name="name" value="{{ old('name') }}" placeholder="Template name" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
+                    <input name="proxmox_template_id" value="{{ old('proxmox_template_id') }}" placeholder="Proxmox VMID" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
+                    <input name="proxmox_node" value="{{ old('proxmox_node', config('services.proxmox.node', 'pve')) }}" placeholder="Proxmox node" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
+                    <input name="ssh_username" value="{{ old('ssh_username', 'student') }}" placeholder="SSH username" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
+                    <input name="cpu" value="{{ old('cpu', 1) }}" placeholder="CPU" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
+                    <input name="ram" value="{{ old('ram', 1024) }}" placeholder="RAM MB" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
+                    <input name="disk" value="{{ old('disk', 10) }}" placeholder="Disk GB" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
+                    <input name="ssh_password" type="password" placeholder="SSH password" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
+                    <textarea name="description" placeholder="Description" class="rounded-lg border border-slate-300 px-3 py-2 text-sm lg:col-span-3">{{ old('description') }}</textarea>
+                    <label class="inline-flex min-h-10 items-center gap-2 text-sm font-semibold text-slate-700">
+                        <input type="checkbox" name="enabled" value="1" checked class="rounded border-slate-300">
+                        Enabled
+                    </label>
+                    <button type="submit" class="inline-flex min-h-10 items-center justify-center rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-500 lg:col-span-4">Create template</button>
+                </form>
+            </x-card>
+        @endif
+
         <x-card title="Template Lab" subtitle="Template praktikum yang tersedia untuk siswa." class="mb-8">
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-slate-100">
@@ -51,6 +73,9 @@
                             <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">RAM</th>
                             <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Disk</th>
                             <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                            @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
+                                <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Manage</th>
+                            @endif
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
@@ -62,13 +87,43 @@
                                         <p class="text-xs text-slate-500 mt-0.5">{{ $template->description }}</p>
                                     @endif
                                 </td>
-                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->proxmox_template_id }}</td>
-                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->cpu_cores }} core</td>
-                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->memory_mb }} MB</td>
-                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->disk_gb }} GB</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->proxmox_node }} / {{ $template->proxmox_template_id }}</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->cpu }} core</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->ram }} MB</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $template->disk }} GB</td>
                                 <td class="px-6 py-4">
-                                    <x-badge :type="$template->is_active ? 'running' : 'inactive'">{{ $template->is_active ? 'active' : 'inactive' }}</x-badge>
+                                    <x-badge :type="$template->enabled ? 'running' : 'inactive'">{{ $template->enabled ? 'enabled' : 'disabled' }}</x-badge>
                                 </td>
+                                @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
+                                    <td class="px-6 py-4">
+                                        <details>
+                                            <summary class="cursor-pointer text-xs font-semibold text-slate-600 hover:text-slate-900">Edit</summary>
+                                            <form method="POST" action="{{ route('dashboard.vm-templates.update', $template) }}" class="mt-3 grid min-w-[28rem] gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
+                                                @csrf
+                                                @method('PUT')
+                                                <input name="name" value="{{ $template->name }}" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                <input name="proxmox_template_id" value="{{ $template->proxmox_template_id }}" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                <input name="proxmox_node" value="{{ $template->proxmox_node }}" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                <input name="ssh_username" value="{{ $template->ssh_username }}" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                <input name="cpu" value="{{ $template->cpu }}" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                <input name="ram" value="{{ $template->ram }}" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                <input name="disk" value="{{ $template->disk }}" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                <input name="ssh_password" type="password" placeholder="New SSH password" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                <textarea name="description" rows="2" class="rounded-md border border-slate-300 px-2 py-2 text-xs sm:col-span-2">{{ $template->description }}</textarea>
+                                                <label class="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
+                                                    <input type="checkbox" name="enabled" value="1" @checked($template->enabled) class="rounded border-slate-300">
+                                                    Enabled
+                                                </label>
+                                                <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800">Save</button>
+                                            </form>
+                                            <form method="POST" action="{{ route('dashboard.vm-templates.destroy', $template) }}" class="mt-2">
+                                                @csrf
+                                                @method('DELETE')
+                                                <button type="submit" class="text-xs font-semibold text-red-600 hover:text-red-700">Delete</button>
+                                            </form>
+                                        </details>
+                                    </td>
+                                @endif
                             </tr>
                         @endforeach
                     </tbody>
@@ -221,7 +276,7 @@
                                         <p class="text-xs text-slate-400">owner_id={{ $vm->user_id }}</p>
                                     @endif
                                 </td>
-                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->labTemplate?->name ?? 'Lab Pribadi' }}</td>
+                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->vmTemplate?->name ?? $vm->labTemplate?->name ?? 'Lab Pribadi' }}</td>
                                 <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->cpu_cores }} core</td>
                                 <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->memory_mb }} MB</td>
                                 <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->disk_gb }} GB</td>
@@ -248,6 +303,27 @@
                                             @csrf
                                             <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed" @disabled($terminalBlocked)>Terminal</button>
                                         </form>
+                                        @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
+                                            <form method="POST" action="{{ route('dashboard.vms.ssh-metadata.refresh', $vm) }}">
+                                                @csrf
+                                                <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled($vm->trashed())>Refresh SSH Metadata</button>
+                                            </form>
+                                            <details class="basis-full">
+                                                <summary class="cursor-pointer text-xs font-semibold text-slate-600 hover:text-slate-900">SSH metadata</summary>
+                                                <form method="POST" action="{{ route('dashboard.vms.ssh-metadata.update', $vm) }}" class="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
+                                                    @csrf
+                                                    <input name="ssh_host" value="{{ $vm->metadata['ssh_host'] ?? '' }}" placeholder="ssh_host" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                    <input name="ip_address" value="{{ $vm->metadata['ip_address'] ?? '' }}" placeholder="ip_address" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                    <input name="private_ip" value="{{ $vm->metadata['private_ip'] ?? '' }}" placeholder="private_ip" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                    <input name="public_ip" value="{{ $vm->metadata['public_ip'] ?? '' }}" placeholder="public_ip" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                    <input name="ssh_port" value="{{ $vm->metadata['ssh_port'] ?? '' }}" placeholder="ssh_port" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                    <input name="ssh_username" value="{{ $vm->metadata['ssh_username'] ?? '' }}" placeholder="ssh_username" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                    <input name="ssh_password" type="password" placeholder="ssh_password" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
+                                                    <textarea name="ssh_private_key" rows="2" placeholder="ssh_private_key" class="rounded-md border border-slate-300 px-2 py-2 text-xs sm:col-span-2"></textarea>
+                                                    <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 sm:col-span-2">Save SSH metadata</button>
+                                                </form>
+                                            </details>
+                                        @endif
                                     </div>
                                 </td>
                             </tr>

@@ -4,6 +4,7 @@ namespace Database\Seeders;
 
 use App\Models\LabTemplate;
 use App\Models\User;
+use App\Models\VmTemplate;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 
@@ -77,6 +78,22 @@ class MockLabSeeder extends Seeder
                     ...$template,
                     'node' => 'pve-mock',
                     'is_active' => true,
+                ],
+            );
+        }
+
+        foreach ($templates as $index => $template) {
+            VmTemplate::updateOrCreate(
+                ['name' => $template['name']],
+                [
+                    'description' => $template['description'],
+                    'proxmox_template_id' => 9000 + $index,
+                    'proxmox_node' => 'pve-mock',
+                    'cpu' => $template['cpu_cores'],
+                    'ram' => $template['memory_mb'],
+                    'disk' => $template['disk_gb'],
+                    'ssh_username' => 'student',
+                    'enabled' => true,
                 ],
             );
         }
