@@ -9,25 +9,25 @@ use App\Models\VmTemplate;
 use App\Services\ProxmoxService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use Throwable;
 
 class StudentVmController extends Controller
 {
-    public function __construct(private readonly ProxmoxService $proxmox)
-    {
-    }
+    public function __construct(private readonly ProxmoxService $proxmox) {}
 
     public function index(Request $request): View
     {
         $user = $this->studentUser($request);
 
         $vms = Vm::query()
-            ->with('user')
-            ->where('user_id', $user->id)
+            ->with(['user', 'practicalAccesses'])
+            ->where(fn ($query) => $query
+                ->where('user_id', $user->id)
+                ->orWhereHas('practicalAccesses', fn ($accessQuery) => $accessQuery->where('user_id', $user->id)))
             ->studentVisible()
             ->latest()
             ->get()
@@ -40,6 +40,7 @@ class StudentVmController extends Controller
             'currentUser' => $user,
             'vms' => $vms,
             'maxStudentVms' => $this->maxStudentVms($user),
+            'quotaUsedVms' => $this->studentQuotaVmCount($user),
             'vmTemplates' => VmTemplate::query()->enabled()->orderBy('name')->get(),
         ]);
     }
@@ -231,7 +232,7 @@ class StudentVmController extends Controller
         $user = Auth::user() ?: $request->user() ?: $this->resolveCloudflareUser($request);
 
         abort_unless($user instanceof User, 403, 'Anda harus login sebagai student.');
-        abort_unless(in_array($user->role, ['student', 'mahasiswa'], true), 403, 'Halaman ini hanya untuk student.');
+        abort_unless(in_array($user->role, ['student', 'mahasiswa', 'siswa'], true), 403, 'Halaman ini hanya untuk student.');
 
         return $user;
     }
@@ -265,7 +266,7 @@ class StudentVmController extends Controller
         return $user->vms()
             ->studentVisible()
             ->get()
-            ->filter(fn (Vm $vm) => $vm->isStudentVisible())
+            ->filter(fn (Vm $vm) => $vm->isStudentVisible() && ! $vm->isManagedAssignment() && ! $vm->isSharedPractical())
             ->count();
     }
 

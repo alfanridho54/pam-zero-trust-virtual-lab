@@ -168,10 +168,10 @@ class TerminalSession extends Model
             return true;
         }
 
-        // Siswa hanya boleh melihat sesi miliknya pada VM miliknya sendiri.
-        return in_array($user->role, ['student', 'mahasiswa'], true)
+        // Siswa hanya boleh melihat sesi miliknya pada VM milik sendiri atau yang dishare.
+        return in_array($user->role, ['student', 'mahasiswa', 'siswa'], true)
             && $this->isOwnedBy($user)
-            && $this->vm?->user_id === $user->id;
+            && ($this->vm?->user_id === $user->id || (bool) $this->vm?->hasPracticalAccess($user));
     }
 
     public function touchActivity(?Carbon $at = null): bool

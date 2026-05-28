@@ -22,6 +22,13 @@ Route::delete('/dashboard/vm-templates/{vmTemplate}', [VmTemplateController::cla
 
 Route::post('/dashboard/simulate/docker-lab', [DashboardController::class, 'createDockerLab'])->name('dashboard.simulate.docker-lab');
 Route::post('/dashboard/simulate/vms/{vm}/resources', [DashboardController::class, 'editVmResource'])->name('dashboard.simulate.vm.resources');
+Route::post('/dashboard/vms/bulk-managed-generation', [DashboardController::class, 'bulkGenerateManagedVms'])->name('dashboard.vms.bulk-managed-generation.store');
+Route::post('/dashboard/vms/{vm}/shared-practical', [DashboardController::class, 'markSharedPractical'])->withTrashed()->name('dashboard.vms.shared-practical.store');
+Route::delete('/dashboard/vms/{vm}/shared-practical', [DashboardController::class, 'unmarkSharedPractical'])->withTrashed()->name('dashboard.vms.shared-practical.destroy');
+Route::post('/dashboard/vms/{vm}/practical-accesses', [DashboardController::class, 'grantPracticalAccess'])->withTrashed()->name('dashboard.vms.practical-accesses.store');
+Route::delete('/dashboard/vms/{vm}/practical-accesses', [DashboardController::class, 'revokePracticalAccess'])->withTrashed()->name('dashboard.vms.practical-accesses.destroy');
+Route::post('/dashboard/vms/{vm}/assignment', [DashboardController::class, 'assignVm'])->withTrashed()->name('dashboard.vms.assignment.store');
+Route::delete('/dashboard/vms/{vm}/assignment', [DashboardController::class, 'unassignVm'])->withTrashed()->name('dashboard.vms.assignment.destroy');
 Route::post('/dashboard/vms/{vm}/ssh-metadata', [DashboardController::class, 'updateVmSshMetadata'])->name('dashboard.vms.ssh-metadata.update');
 Route::post('/dashboard/vms/{vm}/ssh-metadata/refresh', [DashboardController::class, 'refreshVmSshMetadata'])->name('dashboard.vms.ssh-metadata.refresh');
 Route::delete('/dashboard/simulate/vms/{vm}', [DashboardController::class, 'deleteVm'])->name('dashboard.simulate.vm.delete');

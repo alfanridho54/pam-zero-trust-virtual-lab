@@ -17,12 +17,13 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
-use Throwable;
 use Illuminate\View\View;
+use Throwable;
 
 class TerminalSessionController extends Controller
 {
     private const DEFAULT_TEST_COMMAND = 'whoami && hostname && uptime';
+
     private const OUTPUT_EXCERPT_LIMIT = 4000;
 
     /**
@@ -222,7 +223,7 @@ class TerminalSessionController extends Controller
     public function revoke(Request $request, TerminalSession $terminalSession): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
-        abort_unless($user, 403, 'Anda tidak memiliki akses ke session terminal ini.');
+        abort_unless($user, 403, $this->debugSessionAccessMessage(null, $terminalSession, __METHOD__));
 
         $terminalSession->load(['user', 'vm']);
 
@@ -254,6 +255,23 @@ class TerminalSessionController extends Controller
         } while (TerminalSession::where('session_token', $token)->exists());
 
         return $token;
+    }
+
+    private function debugSessionAccessMessage(?User $user, TerminalSession $terminalSession, string $method): string
+    {
+        $terminalSession->loadMissing('vm.practicalAccesses');
+        $vm = $terminalSession->vm;
+        $practicalAccessExists = $user && $vm ? $vm->hasPracticalAccess($user) : false;
+        $canBeAccessedBy = $user ? $terminalSession->canBeAccessedBy($user) : false;
+
+        return 'Anda tidak memiliki akses ke session terminal ini. Debug: '
+            .'auth_id='.($user?->id ?? 'null')
+            .'; session_id='.$terminalSession->id
+            .'; session_user_id='.$terminalSession->user_id
+            .'; vm_id='.$terminalSession->vm_id
+            .'; canBeAccessedBy='.($canBeAccessedBy ? 'true' : 'false')
+            .'; practical_access_exists='.($practicalAccessExists ? 'true' : 'false')
+            .'; returned_by='.$method;
     }
 
     private function makeWebSocketTicket(TerminalSession $terminalSession, User $user): ?string

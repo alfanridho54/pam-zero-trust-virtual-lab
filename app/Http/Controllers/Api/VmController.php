@@ -4,17 +4,15 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
-use App\Models\Vm;
 use App\Models\User;
+use App\Models\Vm;
 use App\Services\ProxmoxService;
-use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 class VmController extends Controller
 {
-    public function __construct(private readonly ProxmoxService $proxmox)
-    {
-    }
+    public function __construct(private readonly ProxmoxService $proxmox) {}
 
     public function index(Request $request): JsonResponse
     {
@@ -163,7 +161,7 @@ class VmController extends Controller
         return $user->vms()
             ->studentVisible()
             ->get()
-            ->filter(fn (Vm $vm) => $vm->isStudentVisible());
+            ->filter(fn (Vm $vm) => $vm->isStudentVisible() && ! $vm->isManagedAssignment() && ! $vm->isSharedPractical());
     }
 
     private function mockUser(Request $request): User

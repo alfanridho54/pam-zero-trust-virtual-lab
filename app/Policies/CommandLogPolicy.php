@@ -6,6 +6,7 @@ use App\Models\CommandLog;
 use App\Models\TerminalSession;
 use App\Models\User;
 use Illuminate\Auth\Access\Response;
+use Illuminate\Support\Facades\Log;
 
 class CommandLogPolicy
 {
@@ -20,13 +21,13 @@ class CommandLogPolicy
     {
         return $this->canAccessSession($user, $terminalSession)
             ? Response::allow()
-            : Response::deny('Anda tidak memiliki akses ke session terminal ini.');
+            : Response::deny($this->debugSessionAccessMessage($user, $terminalSession, __METHOD__));
     }
 
     public function execute(User $user, TerminalSession $terminalSession, string $command): Response
     {
         if (! $this->canAccessSession($user, $terminalSession)) {
-            return Response::deny('Anda tidak memiliki akses ke session terminal ini.');
+            return Response::deny($this->debugSessionAccessMessage($user, $terminalSession, __METHOD__));
         }
 
         if ($this->protectedVm($terminalSession)) {
@@ -57,29 +58,59 @@ class CommandLogPolicy
             return false;
         }
 
+        $terminalSession->loadMissing('vm.practicalAccesses');
         $vm = $terminalSession->vm;
 
         if (! $vm || $vm->trashed()) {
             return false;
         }
 
-        if ($user->role === 'admin') {
-            return true;
+        $canAccess = $terminalSession->canBeAccessedBy($user);
+
+        if (! $canAccess) {
+            $this->logDeniedSessionAccess($user, $terminalSession, 'command_log_policy');
         }
 
-        if ($user->role === 'guru') {
-            // TODO: Batasi ke siswa bimbingan setelah relasi guru-siswa tersedia.
-            return true;
-        }
-
-        // Siswa harus menjadi pemilik session sekaligus pemilik VM target.
-        return in_array($user->role, ['student', 'mahasiswa'], true)
-            && $terminalSession->user_id === $user->id
-            && $vm->user_id === $user->id;
+        return $canAccess;
     }
 
     private function protectedVm(TerminalSession $terminalSession): bool
     {
         return $terminalSession->vm?->isProtectedVm() ?? true;
+    }
+
+    private function logDeniedSessionAccess(User $user, TerminalSession $terminalSession, string $source): void
+    {
+        $vm = $terminalSession->vm;
+        $practicalAccessExists = $vm?->hasPracticalAccess($user) ?? false;
+
+        Log::warning('Terminal session access denied.', [
+            'source' => $source,
+            'auth_id' => $user->id,
+            'session_id' => $terminalSession->id,
+            'session_user_id' => $terminalSession->user_id,
+            'session_vm_id' => $terminalSession->vm_id,
+            'vm_user_id' => $vm?->user_id,
+            'shared_practical' => (bool) ($vm?->metadata['shared_practical'] ?? false),
+            'practical_access_exists' => $practicalAccessExists,
+            'can_be_accessed_by' => false,
+        ]);
+    }
+
+    private function debugSessionAccessMessage(User $user, TerminalSession $terminalSession, string $method): string
+    {
+        $terminalSession->loadMissing('vm.practicalAccesses');
+        $vm = $terminalSession->vm;
+        $practicalAccessExists = $vm?->hasPracticalAccess($user) ?? false;
+        $canBeAccessedBy = $terminalSession->canBeAccessedBy($user);
+
+        return 'Anda tidak memiliki akses ke session terminal ini. Debug: '
+            .'auth_id='.$user->id
+            .'; session_id='.$terminalSession->id
+            .'; session_user_id='.$terminalSession->user_id
+            .'; vm_id='.$terminalSession->vm_id
+            .'; canBeAccessedBy='.($canBeAccessedBy ? 'true' : 'false')
+            .'; practical_access_exists='.($practicalAccessExists ? 'true' : 'false')
+            .'; returned_by='.$method;
     }
 }

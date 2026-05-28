@@ -13,9 +13,13 @@ use Illuminate\Support\Str;
 class ProxmoxService
 {
     protected string $host;
+
     protected string $node;
+
     protected string $tokenId;
+
     protected string $tokenSecret;
+
     protected bool $verifySsl;
 
     public function __construct()
@@ -329,6 +333,17 @@ class ProxmoxService
             $template->proxmox_node,
             $template->proxmox_template_id,
         );
+    }
+
+    public function cloneManagedVmFromVm(Vm $templateVm, string $vmName): array
+    {
+        $templateVmid = $templateVm->proxmoxVmid();
+
+        if ($templateVmid === null) {
+            return $this->failure('Source template VM belum memiliki VMID Proxmox.', 422);
+        }
+
+        return $this->cloneStudentVm($vmName, $templateVm->node, $templateVmid);
     }
 
     private function cloneStudentVm(string $vmName, string $node, int $templateVmid): array

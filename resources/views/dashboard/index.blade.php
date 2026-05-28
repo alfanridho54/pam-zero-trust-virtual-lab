@@ -242,6 +242,49 @@
             </div>
         </x-card>
 
+        @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
+            <x-card title="Bulk Managed Practical VM" subtitle="Clone one practical VM per selected siswa from a safe source template VM." class="mb-8">
+                <form method="POST" action="{{ route('dashboard.vms.bulk-managed-generation.store') }}" class="grid gap-4 p-6 lg:grid-cols-[minmax(14rem,1fr)_minmax(14rem,1fr)_auto]">
+                    @csrf
+                    <div>
+                        <label for="source_vm_id" class="text-sm font-semibold text-slate-800">Source template VM</label>
+                        <select id="source_vm_id" name="source_vm_id" class="mt-2 min-h-10 w-full rounded-lg border border-slate-300 px-3 text-sm" required>
+                            <option value="">Pilih source VM</option>
+                            @foreach ($sourceTemplateVms as $sourceVm)
+                                <option value="{{ $sourceVm->id }}" @selected((string) old('source_vm_id') === (string) $sourceVm->id)>
+                                    {{ $sourceVm->name }} - VMID {{ $sourceVm->proxmoxVmid() ?? '-' }}
+                                </option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div>
+                        <label for="target_mode" class="text-sm font-semibold text-slate-800">Target siswa</label>
+                        <select id="target_mode" name="target_mode" class="mt-2 min-h-10 w-full rounded-lg border border-slate-300 px-3 text-sm">
+                            <option value="all" @selected(old('target_mode', 'all') === 'all')>Semua siswa</option>
+                            <option value="selected" @selected(old('target_mode') === 'selected')>Siswa terpilih</option>
+                        </select>
+                    </div>
+                    <label class="mt-7 inline-flex min-h-10 items-center gap-2 text-sm font-semibold text-slate-700">
+                        <input type="checkbox" name="confirm_duplicates" value="1" class="rounded border-slate-300" @checked(old('confirm_duplicates'))>
+                        Confirm duplicates
+                    </label>
+                    <div class="lg:col-span-2">
+                        <label for="student_ids" class="text-sm font-semibold text-slate-800">Selected siswa</label>
+                        <select id="student_ids" name="student_ids[]" multiple size="4" class="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                            @foreach ($students as $student)
+                                <option value="{{ $student->id }}" @selected(in_array((string) $student->id, old('student_ids', []), true))>
+                                    {{ $student->name }} ({{ $student->email }})
+                                </option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <button type="submit" class="inline-flex min-h-10 items-center justify-center self-end rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50" @disabled($sourceTemplateVms->isEmpty() || $students->isEmpty())>
+                        Generate VMs
+                    </button>
+                </form>
+            </x-card>
+        @endif
+
         <x-card title="VM Lokal Demo" subtitle="Data lokal untuk simulasi ownership, quota, RBAC, dan audit lama." class="mb-8">
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-slate-100">
@@ -260,9 +303,10 @@
                     <tbody class="divide-y divide-slate-100">
                         @forelse ($vms as $vm)
                             @php
-                                $isCriticalVm = filter_var($vm->metadata['critical'] ?? false, FILTER_VALIDATE_BOOLEAN);
-                                $isSystemVm = filter_var($vm->metadata['system_vm'] ?? false, FILTER_VALIDATE_BOOLEAN);
-                                $isProtectedVm = $isCriticalVm || $isSystemVm;
+                                $isCriticalVm = $vm->isCritical();
+                                $isSystemVm = $vm->isSystemVm();
+                                $isProtectedVm = $vm->isProtectedVm();
+                                $canAssignVm = ! $vm->trashed() && ! $isSystemVm && ! $isCriticalVm;
                                 $terminalBlocked = $vm->trashed() || $isProtectedVm;
                             @endphp
                             <tr class="hover:bg-slate-50/50 transition-colors">
@@ -274,6 +318,17 @@
                                     {{ $isSystemVm ? 'System VM' : ($vm->user?->name ?? '-') }}
                                     @if (! $isSystemVm)
                                         <p class="text-xs text-slate-400">owner_id={{ $vm->user_id }}</p>
+                                    @endif
+                                    @if ($vm->isSharedPractical())
+                                        <div class="mt-2">
+                                            <x-badge type="owned">Shared practical</x-badge>
+                                            <p class="mt-1 text-xs text-slate-500">{{ $vm->practicalAccesses->count() }} siswa access</p>
+                                            @if ($vm->practicalAccesses->isNotEmpty())
+                                                <p class="mt-1 max-w-[18rem] text-xs text-slate-400">
+                                                    {{ $vm->practicalAccesses->pluck('user.name')->filter()->join(', ') }}
+                                                </p>
+                                            @endif
+                                        </div>
                                     @endif
                                 </td>
                                 <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->vmTemplate?->name ?? $vm->labTemplate?->name ?? 'Lab Pribadi' }}</td>
@@ -304,6 +359,74 @@
                                             <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed" @disabled($terminalBlocked)>Terminal</button>
                                         </form>
                                         @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
+                                            <details class="basis-full">
+                                                <summary class="cursor-pointer text-xs font-semibold text-slate-600 hover:text-slate-900">Shared practical access</summary>
+                                                <div class="mt-3 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                                    <div class="flex flex-wrap gap-2">
+                                                        @if (! $vm->isSharedPractical())
+                                                            <form method="POST" action="{{ route('dashboard.vms.shared-practical.store', $vm) }}">
+                                                                @csrf
+                                                                <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $canAssignVm)>Mark shared</button>
+                                                            </form>
+                                                        @else
+                                                            <form method="POST" action="{{ route('dashboard.vms.shared-practical.destroy', $vm) }}">
+                                                                @csrf
+                                                                @method('DELETE')
+                                                                <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-red-50 px-3 text-xs font-semibold text-red-700 ring-1 ring-inset ring-red-200 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $canAssignVm)>Unmark shared</button>
+                                                            </form>
+                                                        @endif
+                                                    </div>
+                                                    <form method="POST" action="{{ route('dashboard.vms.practical-accesses.store', $vm) }}" class="grid gap-2 sm:grid-cols-[10rem_minmax(14rem,1fr)_auto]">
+                                                        @csrf
+                                                        <select name="target_mode" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs" @disabled(! $canAssignVm)>
+                                                            <option value="all">Semua siswa</option>
+                                                            <option value="selected">Siswa terpilih</option>
+                                                        </select>
+                                                        <select name="student_ids[]" multiple size="3" class="rounded-md border border-slate-300 px-2 py-2 text-xs" @disabled(! $canAssignVm || $students->isEmpty())>
+                                                            @foreach ($students as $student)
+                                                                <option value="{{ $student->id }}" @selected($vm->practicalAccesses->contains('user_id', $student->id))>{{ $student->name }} ({{ $student->email }})</option>
+                                                            @endforeach
+                                                        </select>
+                                                        <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $canAssignVm || $students->isEmpty())>Grant</button>
+                                                    </form>
+                                                    <form method="POST" action="{{ route('dashboard.vms.practical-accesses.destroy', $vm) }}" class="grid gap-2 sm:grid-cols-[10rem_minmax(14rem,1fr)_auto]">
+                                                        @csrf
+                                                        @method('DELETE')
+                                                        <select name="target_mode" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs" @disabled(! $canAssignVm)>
+                                                            <option value="selected">Siswa terpilih</option>
+                                                            <option value="all">Semua siswa</option>
+                                                        </select>
+                                                        <select name="student_ids[]" multiple size="3" class="rounded-md border border-slate-300 px-2 py-2 text-xs" @disabled(! $canAssignVm || $vm->practicalAccesses->isEmpty())>
+                                                            @foreach ($vm->practicalAccesses as $access)
+                                                                <option value="{{ $access->user_id }}" selected>{{ $access->user?->name ?? 'user_id='.$access->user_id }}</option>
+                                                            @endforeach
+                                                        </select>
+                                                        <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-slate-100 px-3 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $canAssignVm || $vm->practicalAccesses->isEmpty())>Revoke</button>
+                                                    </form>
+                                                </div>
+                                            </details>
+                                            <details class="basis-full">
+                                                <summary class="cursor-pointer text-xs font-semibold text-slate-600 hover:text-slate-900">Assign siswa</summary>
+                                                <div class="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[minmax(12rem,1fr)_auto]">
+                                                    <form method="POST" action="{{ route('dashboard.vms.assignment.store', $vm) }}" class="contents">
+                                                        @csrf
+                                                        <select name="student_id" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs" @disabled(! $canAssignVm || $students->isEmpty())>
+                                                            <option value="">Pilih siswa</option>
+                                                            @foreach ($students as $student)
+                                                                <option value="{{ $student->id }}" @selected($vm->user_id === $student->id)>
+                                                                    {{ $student->name }} ({{ $student->email }})
+                                                                </option>
+                                                            @endforeach
+                                                        </select>
+                                                        <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $canAssignVm || $students->isEmpty())>Assign</button>
+                                                    </form>
+                                                    <form method="POST" action="{{ route('dashboard.vms.assignment.destroy', $vm) }}" class="sm:col-span-2">
+                                                        @csrf
+                                                        @method('DELETE')
+                                                        <button type="submit" class="text-xs font-semibold text-red-600 hover:text-red-700 disabled:text-slate-400 disabled:cursor-not-allowed" @disabled(! $canAssignVm || $vm->user_id === null)>Unassign</button>
+                                                    </form>
+                                                </div>
+                                            </details>
                                             <form method="POST" action="{{ route('dashboard.vms.ssh-metadata.refresh', $vm) }}">
                                                 @csrf
                                                 <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled($vm->trashed())>Refresh SSH Metadata</button>

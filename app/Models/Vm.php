@@ -2,10 +2,10 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Vm extends Model
@@ -75,6 +75,11 @@ class Vm extends Model
         return $this->hasMany(CommandLog::class);
     }
 
+    public function practicalAccesses(): HasMany
+    {
+        return $this->hasMany(PracticalVmAccess::class);
+    }
+
     public function proxmoxVmid(): ?int
     {
         // VMID dapat berasal dari proxmox_id atau metadata agar record mock dan real tetap bisa dicocokkan.
@@ -120,11 +125,38 @@ class Vm extends Model
         return $this->isSystemVm() || $this->isCriticalVm() || $this->metadataFlag('protected');
     }
 
+    public function isManagedAssignment(): bool
+    {
+        return $this->metadataFlag('managed_assignment');
+    }
+
+    public function isSharedPractical(): bool
+    {
+        return $this->metadataFlag('shared_practical');
+    }
+
+    public function hasPracticalAccess(User|int $user): bool
+    {
+        $userId = $user instanceof User ? $user->id : $user;
+
+        if ($this->relationLoaded('practicalAccesses')) {
+            return $this->practicalAccesses->contains('user_id', $userId);
+        }
+
+        return $this->practicalAccesses()->where('user_id', $userId)->exists();
+    }
+
+    public function isUsableManagedTemplate(): bool
+    {
+        return ! $this->trashed()
+            && (! $this->isProtectedVm() || $this->metadataFlag('usable_template') || $this->metadataFlag('managed_template'));
+    }
+
     public function isProvisionedStudentVm(): bool
     {
         $metadata = $this->sshMetadataArray();
 
-        return in_array($metadata['provisioning'] ?? null, ['template-clone', 'student-self-service'], true)
+        return in_array($metadata['provisioning'] ?? null, ['template-clone', 'student-self-service', 'managed-template-clone'], true)
             || array_key_exists('source_template_vmid', $metadata)
             || array_key_exists('task_upid', $metadata);
     }

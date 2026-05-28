@@ -4,7 +4,6 @@ namespace App\Policies;
 
 use App\Models\User;
 use App\Models\Vm;
-use Illuminate\Auth\Access\Response;
 
 class VmPolicy
 {
@@ -74,7 +73,7 @@ class VmPolicy
         return match ($user->role) {
             'admin' => 'admin',
             'guru', 'teacher' => 'guru',
-            'student', 'mahasiswa' => 'student',
+            'student', 'mahasiswa', 'siswa' => 'student',
             default => 'guest',
         };
     }

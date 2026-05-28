@@ -24,7 +24,7 @@
                     @error('name')
                         <p class="mt-1 text-xs font-semibold text-red-600">{{ $message }}</p>
                     @enderror
-                    <p class="mt-2 text-xs text-slate-500">{{ $vms->count() }} of {{ $maxStudentVms }} VM quota used.</p>
+                    <p class="mt-2 text-xs text-slate-500">{{ $quotaUsedVms }} of {{ $maxStudentVms }} VM quota used.</p>
                 </div>
                 <div>
                     <label for="vm_template_id" class="text-sm font-semibold text-slate-800">Template</label>
@@ -47,7 +47,7 @@
                 <button
                     type="submit"
                     class="inline-flex min-h-10 items-center justify-center rounded-lg bg-indigo-600 px-4 text-sm font-bold text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    @disabled($vms->count() >= $maxStudentVms || $vmTemplates->isEmpty())
+                    @disabled($quotaUsedVms >= $maxStudentVms || $vmTemplates->isEmpty())
                 >
                     Create VM
                 </button>
@@ -76,12 +76,16 @@
                             @php
                                 $protected = $vm->isProtectedVm();
                                 $running = $vm->status === 'running';
+                                $ownedByStudent = $vm->user_id === $currentUser->id;
+                                $sharedPractical = ! $ownedByStudent && $vm->hasPracticalAccess($currentUser);
                             @endphp
                             <tr class="hover:bg-slate-50/50">
                                 <td class="px-5 py-4 text-sm">
                                     <span class="font-semibold text-slate-900">{{ $vm->name }}</span>
                                     @if ($protected)
                                         <span class="ml-2"><x-badge type="system">Protected</x-badge></span>
+                                    @elseif ($sharedPractical)
+                                        <span class="ml-2"><x-badge type="owned">Shared practical</x-badge></span>
                                     @endif
                                 </td>
                                 <td class="px-5 py-4 text-sm text-slate-600">{{ $vm->proxmoxVmid() ?? '-' }}</td>
@@ -93,15 +97,15 @@
                                     <div class="flex flex-wrap gap-2">
                                         <form method="POST" action="{{ route('student.vms.action', [$vm, 'start']) }}">
                                             @csrf
-                                            <button type="submit" class="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50" @disabled($protected || $running)>Start</button>
+                                            <button type="submit" class="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50" @disabled($protected || $sharedPractical || $running)>Start</button>
                                         </form>
                                         <form method="POST" action="{{ route('student.vms.action', [$vm, 'stop']) }}">
                                             @csrf
-                                            <button type="submit" class="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-inset ring-red-200 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50" @disabled($protected || ! $running)>Stop</button>
+                                            <button type="submit" class="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-inset ring-red-200 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50" @disabled($protected || $sharedPractical || ! $running)>Stop</button>
                                         </form>
                                         <form method="POST" action="{{ route('student.vms.action', [$vm, 'shutdown']) }}">
                                             @csrf
-                                            <button type="submit" class="rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-200 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50" @disabled($protected || ! $running)>Shutdown</button>
+                                            <button type="submit" class="rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-200 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50" @disabled($protected || $sharedPractical || ! $running)>Shutdown</button>
                                         </form>
                                         <form method="POST" action="{{ route('terminal-sessions.store', $vm) }}">
                                             @csrf
@@ -110,7 +114,7 @@
                                         <form method="POST" action="{{ route('student.vms.destroy', $vm) }}">
                                             @csrf
                                             @method('DELETE')
-                                            <button type="submit" class="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50" @disabled($protected)>Delete</button>
+                                            <button type="submit" class="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50" @disabled($protected || $sharedPractical)>Delete</button>
                                         </form>
                                     </div>
                                 </td>

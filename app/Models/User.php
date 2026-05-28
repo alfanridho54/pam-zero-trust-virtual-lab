@@ -4,9 +4,9 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Database\Factories\UserFactory;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
@@ -68,6 +68,11 @@ class User extends Authenticatable
     public function commandLogs(): HasMany
     {
         return $this->hasMany(CommandLog::class);
+    }
+
+    public function practicalVmAccesses(): HasMany
+    {
+        return $this->hasMany(PracticalVmAccess::class);
     }
 
     public function quota(): HasOne

@@ -55,6 +55,95 @@ class TerminalWebSocketCommandTest extends TestCase
         ]);
     }
 
+    public function test_shared_practical_session_can_run_websocket_command_service_path(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, [
+            'status' => TerminalSessionStatus::Active,
+            'last_activity_at' => now()->subMinutes(10),
+        ]);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: true,
+                    exitCode: 0,
+                    durationMs: 12,
+                    output: "student\nshared-practical\n",
+                );
+            }
+        });
+
+        $result = $this->app->make(TerminalWebSocketCommandService::class)
+            ->run($terminalSession, $user, 'whoami');
+
+        $this->assertSame('output', $result->type);
+        $this->assertSame(CommandLogStatus::Succeeded->value, $result->status);
+        $this->assertDatabaseHas('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $user->id,
+            'vm_id' => $terminalSession->vm_id,
+            'command' => 'whoami',
+            'status' => CommandLogStatus::Succeeded->value,
+        ]);
+    }
+
+    public function test_websocket_command_requires_shared_practical_access(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, [
+            'status' => TerminalSessionStatus::Active,
+        ], grantAccess: false);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                throw new \RuntimeException('SSH should not run without shared practical access.');
+            }
+        });
+
+        $result = $this->app->make(TerminalWebSocketCommandService::class)
+            ->run($terminalSession, $user, 'whoami');
+
+        $this->assertSame('blocked', $result->type);
+        $this->assertSame(CommandLogStatus::Blocked->value, $result->status);
+        $this->assertStringContainsString('Anda tidak memiliki akses ke session terminal ini. Debug:', $result->output);
+        $this->assertStringContainsString('returned_by=App\Policies\CommandLogPolicy::execute', $result->output);
+        $this->assertDatabaseHas('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $user->id,
+            'command' => 'whoami',
+            'status' => CommandLogStatus::Blocked->value,
+        ]);
+    }
+
+    public function test_websocket_command_cannot_use_another_users_terminal_session(): void
+    {
+        $owner = $this->student();
+        $otherStudent = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($owner, [
+            'status' => TerminalSessionStatus::Active,
+        ]);
+        $terminalSession->vm->practicalAccesses()->create([
+            'user_id' => $otherStudent->id,
+        ]);
+
+        $result = $this->app->make(TerminalWebSocketCommandService::class)
+            ->run($terminalSession, $otherStudent, 'whoami');
+
+        $this->assertSame('blocked', $result->type);
+        $this->assertSame(CommandLogStatus::Blocked->value, $result->status);
+        $this->assertDatabaseHas('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $otherStudent->id,
+            'command' => 'whoami',
+            'status' => CommandLogStatus::Blocked->value,
+        ]);
+    }
+
     public function test_dynamic_vm_websocket_command_uses_vm_metadata_password(): void
     {
         config(['services.terminal.ssh_password' => 'wrong-config-password']);
@@ -200,6 +289,49 @@ class TerminalWebSocketCommandTest extends TestCase
             'node' => $vm->node,
             'proxmox_id' => $vm->proxmox_id,
             'vmid' => 101,
+            'ssh_host' => '127.0.0.1',
+            'ssh_port' => 22,
+            'ssh_username' => 'student',
+            'status' => TerminalSessionStatus::Active,
+            'started_at' => now(),
+            'last_activity_at' => now(),
+            'expires_at' => now()->addMinutes(30),
+            'metadata' => [],
+            ...$sessionAttributes,
+        ]);
+    }
+
+    private function sharedPracticalTerminalSessionFor(User $user, array $sessionAttributes = [], bool $grantAccess = true): TerminalSession
+    {
+        $vm = Vm::create([
+            'user_id' => null,
+            'name' => 'shared-practical-ubuntu',
+            'proxmox_id' => 'shared-'.str()->random(8),
+            'node' => 'pve-mock',
+            'status' => 'running',
+            'cpu_cores' => 1,
+            'memory_mb' => 1024,
+            'disk_gb' => 10,
+            'metadata' => [
+                'shared_practical' => true,
+                'ssh_host' => '127.0.0.1',
+                'ssh_port' => 22,
+                'ssh_username' => 'student',
+            ],
+        ]);
+
+        if ($grantAccess) {
+            $vm->practicalAccesses()->create([
+                'user_id' => $user->id,
+            ]);
+        }
+
+        return TerminalSession::create([
+            'user_id' => $user->id,
+            'vm_id' => $vm->id,
+            'node' => $vm->node,
+            'proxmox_id' => $vm->proxmox_id,
+            'vmid' => 2601,
             'ssh_host' => '127.0.0.1',
             'ssh_port' => 22,
             'ssh_username' => 'student',

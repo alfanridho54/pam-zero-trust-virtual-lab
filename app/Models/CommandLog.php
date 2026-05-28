@@ -149,7 +149,7 @@ class CommandLog extends Model
         }
 
         // Siswa hanya dapat melihat command miliknya pada sesi terminal miliknya.
-        return in_array($user->role, ['student', 'mahasiswa'], true)
+        return in_array($user->role, ['student', 'mahasiswa', 'siswa'], true)
             && $this->isOwnedBy($user)
             && $this->terminalSession?->isOwnedBy($user);
     }

@@ -7,6 +7,7 @@ use App\Enums\TerminalSessionStatus;
 use App\Models\AuditLog;
 use App\Models\CommandLog;
 use App\Models\LabTemplate;
+use App\Models\PracticalVmAccess;
 use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
@@ -16,13 +17,13 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
 class DashboardController extends Controller
 {
-    public function __construct(private readonly ProxmoxService $proxmox)
-    {
-    }
+    public function __construct(private readonly ProxmoxService $proxmox) {}
 
     public function index(): View
     {
@@ -98,6 +99,309 @@ class DashboardController extends Controller
         $vm->delete();
 
         return back()->with('status', 'VM berhasil di-soft delete.');
+    }
+
+    public function assignVm(Request $request, Vm $vm): RedirectResponse
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk assign VM.');
+
+        if (! $this->canAssignVm($vm)) {
+            $this->audit($user?->id, $vm->id, 'dashboard.vm.assignment.blocked', 'Assignment VM diblokir karena VM dilindungi atau sudah dihapus.', [
+                'system_vm' => $vm->isSystemVm(),
+                'critical' => $vm->isCritical(),
+                'trashed' => $vm->trashed(),
+            ]);
+
+            return back()->with('error', 'VM system, critical, atau soft-deleted tidak bisa diassign.');
+        }
+
+        $data = $request->validate([
+            'student_id' => [
+                'required',
+                'integer',
+                Rule::exists('users', 'id')->where(fn ($query) => $query->whereIn('role', $this->studentRoles())),
+            ],
+        ]);
+
+        $previousOwnerId = $vm->user_id;
+        $metadata = $vm->metadata ?? [];
+        $metadata['managed_assignment'] = true;
+        $metadata['assigned_by_user_id'] = $user?->id;
+        $metadata['assigned_at'] = now()->toISOString();
+
+        $vm->update([
+            'user_id' => $data['student_id'],
+            'metadata' => $metadata,
+        ]);
+
+        $this->audit($user?->id, $vm->id, 'dashboard.vm.assigned', 'Dashboard mengassign VM praktikum ke siswa.', [
+            'previous_user_id' => $previousOwnerId,
+            'assigned_user_id' => $data['student_id'],
+        ]);
+
+        return back()->with('status', 'VM berhasil diassign ke siswa.');
+    }
+
+    public function unassignVm(Request $request, Vm $vm): RedirectResponse
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk unassign VM.');
+
+        if (! $this->canAssignVm($vm)) {
+            $this->audit($user?->id, $vm->id, 'dashboard.vm.unassignment.blocked', 'Unassign VM diblokir karena VM dilindungi atau sudah dihapus.', [
+                'system_vm' => $vm->isSystemVm(),
+                'critical' => $vm->isCritical(),
+                'trashed' => $vm->trashed(),
+            ]);
+
+            return back()->with('error', 'VM system, critical, atau soft-deleted tidak bisa di-unassign.');
+        }
+
+        $previousOwnerId = $vm->user_id;
+        $metadata = $vm->metadata ?? [];
+        unset($metadata['assigned_by_user_id']);
+        $metadata['managed_assignment'] = false;
+        $metadata['unassigned_by_user_id'] = $user?->id;
+        $metadata['unassigned_at'] = now()->toISOString();
+
+        $vm->update([
+            'user_id' => null,
+            'metadata' => $metadata,
+        ]);
+
+        $this->audit($user?->id, $vm->id, 'dashboard.vm.unassigned', 'Dashboard melepas assignment VM praktikum dari siswa.', [
+            'previous_user_id' => $previousOwnerId,
+        ]);
+
+        return back()->with('status', 'VM berhasil di-unassign.');
+    }
+
+    public function bulkGenerateManagedVms(Request $request): RedirectResponse
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk bulk generate VM.');
+
+        $data = $request->validate([
+            'source_vm_id' => ['required', 'integer', 'exists:vms,id'],
+            'target_mode' => ['required', Rule::in(['all', 'selected'])],
+            'student_ids' => ['array'],
+            'student_ids.*' => [
+                'integer',
+                Rule::exists('users', 'id')->where(fn ($query) => $query->whereIn('role', $this->studentRoles())),
+            ],
+            'confirm_duplicates' => ['nullable', 'boolean'],
+        ]);
+
+        $sourceVm = Vm::query()->findOrFail($data['source_vm_id']);
+
+        if (! $sourceVm->isUsableManagedTemplate()) {
+            $this->audit($user?->id, $sourceVm->id, 'dashboard.vm.bulk_generation.blocked', 'Bulk generation diblokir karena source VM bukan template praktikum yang aman.', [
+                'system_vm' => $sourceVm->isSystemVm(),
+                'critical' => $sourceVm->isCritical(),
+                'usable_template' => (bool) ($sourceVm->metadata['usable_template'] ?? $sourceVm->metadata['managed_template'] ?? false),
+            ]);
+
+            return back()->withInput()->with('error', 'Source VM system/critical hanya boleh diclone jika metadata usable_template atau managed_template bernilai true.');
+        }
+
+        $students = $this->targetStudentsForBulkGeneration($data);
+
+        if ($students->isEmpty()) {
+            return back()->withInput()->with('error', 'Pilih minimal satu siswa untuk bulk generation.');
+        }
+
+        $sourceTemplateVmid = $sourceVm->proxmoxVmid();
+
+        if ($sourceTemplateVmid === null) {
+            return back()->withInput()->with('error', 'Source template VM belum memiliki VMID Proxmox.');
+        }
+
+        $duplicates = $this->duplicateManagedAssignments($students, $sourceTemplateVmid);
+
+        if ($duplicates->isNotEmpty() && ! $request->boolean('confirm_duplicates')) {
+            $names = $duplicates
+                ->map(fn (Vm $vm) => $vm->user?->name ?? 'user_id='.$vm->user_id)
+                ->unique()
+                ->implode(', ');
+
+            return back()
+                ->withInput()
+                ->with('error', 'Managed VM untuk source template ini sudah ada: '.$names.'. Centang confirm duplicates untuk membuat lagi.');
+        }
+
+        $created = collect();
+        $failed = collect();
+
+        foreach ($students as $student) {
+            $vmName = $this->managedVmName($student, $sourceVm);
+            $clone = $this->proxmox->cloneManagedVmFromVm($sourceVm, $vmName);
+
+            if (! ($clone['success'] ?? false)) {
+                $failed->push($student->name);
+                $this->audit($user?->id, $sourceVm->id, 'dashboard.vm.bulk_generation.clone_failed', 'Clone managed practical VM gagal.', [
+                    'student_id' => $student->id,
+                    'student_name' => $student->name,
+                    'proxmox' => $clone,
+                ]);
+
+                continue;
+            }
+
+            $vm = $student->vms()->create([
+                'name' => $vmName,
+                'lab_template_id' => $sourceVm->lab_template_id,
+                'vm_template_id' => $sourceVm->vm_template_id,
+                'proxmox_id' => (string) $clone['proxmox_id'],
+                'node' => $clone['node'],
+                'status' => $clone['local_status'] ?? 'stopped',
+                'cpu_cores' => $sourceVm->cpu_cores,
+                'memory_mb' => $sourceVm->memory_mb,
+                'disk_gb' => $sourceVm->disk_gb,
+                'metadata' => [
+                    ...$this->sshMetadataFromVm($sourceVm),
+                    ...$this->sshMetadataFromClone($clone),
+                    'vmid' => $clone['vmid'] ?? null,
+                    'managed_assignment' => true,
+                    'source_template_vm_id' => $sourceVm->id,
+                    'source_template_vmid' => $sourceTemplateVmid,
+                    'provisioning' => 'managed-template-clone',
+                    'task_upid' => $clone['task_upid'] ?? null,
+                    'assigned_by_user_id' => $user?->id,
+                    'assigned_at' => now()->toISOString(),
+                ],
+            ]);
+
+            $this->detectAndStoreSshMetadata($vm);
+            $created->push($vm);
+        }
+
+        $this->audit($user?->id, $sourceVm->id, 'dashboard.vm.bulk_generation.completed', 'Dashboard bulk generate managed practical VM.', [
+            'source_template_vmid' => $sourceTemplateVmid,
+            'created_vm_ids' => $created->pluck('id')->all(),
+            'failed_students' => $failed->all(),
+        ]);
+
+        $message = $created->count().' managed practical VM berhasil dibuat.';
+
+        if ($failed->isNotEmpty()) {
+            return back()->with('error', $message.' Gagal untuk: '.$failed->implode(', '));
+        }
+
+        return back()->with('status', $message);
+    }
+
+    public function markSharedPractical(Request $request, Vm $vm): RedirectResponse
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk mengubah shared practical VM.');
+
+        if (! $this->canSharePracticalVm($vm)) {
+            $this->audit($user?->id, $vm->id, 'dashboard.vm.shared_practical.blocked', 'Mark shared practical VM diblokir.', [
+                'system_vm' => $vm->isSystemVm(),
+                'critical' => $vm->isCritical(),
+                'trashed' => $vm->trashed(),
+            ]);
+
+            return back()->with('error', 'VM system, critical, atau soft-deleted tidak bisa dijadikan shared practical.');
+        }
+
+        $vm->update([
+            'metadata' => [
+                ...($vm->metadata ?? []),
+                'shared_practical' => true,
+            ],
+        ]);
+
+        $this->audit($user?->id, $vm->id, 'dashboard.vm.shared_practical.marked', 'VM ditandai sebagai shared practical.');
+
+        return back()->with('status', 'VM ditandai sebagai shared practical.');
+    }
+
+    public function unmarkSharedPractical(Request $request, Vm $vm): RedirectResponse
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk mengubah shared practical VM.');
+
+        if ($vm->trashed() || $vm->isProtectedVm()) {
+            return back()->with('error', 'VM system, critical, atau soft-deleted tidak bisa diubah.');
+        }
+
+        $metadata = $vm->metadata ?? [];
+        $metadata['shared_practical'] = false;
+
+        $vm->update(['metadata' => $metadata]);
+        $vm->practicalAccesses()->delete();
+
+        $this->audit($user?->id, $vm->id, 'dashboard.vm.shared_practical.unmarked', 'Shared practical VM dinonaktifkan dan akses siswa dicabut.');
+
+        return back()->with('status', 'Shared practical VM dinonaktifkan.');
+    }
+
+    public function grantPracticalAccess(Request $request, Vm $vm): RedirectResponse
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk grant shared VM.');
+
+        if (! $this->canSharePracticalVm($vm)) {
+            return back()->with('error', 'VM system, critical, atau soft-deleted tidak bisa dishare.');
+        }
+
+        $data = $this->validatePracticalAccessRequest($request);
+        $students = $this->targetStudentsForAccess($data);
+
+        if ($students->isEmpty()) {
+            return back()->withInput()->with('error', 'Pilih minimal satu siswa.');
+        }
+
+        if (! $vm->isSharedPractical()) {
+            $vm->update([
+                'metadata' => [
+                    ...($vm->metadata ?? []),
+                    'shared_practical' => true,
+                ],
+            ]);
+        }
+
+        foreach ($students as $student) {
+            PracticalVmAccess::updateOrCreate(
+                [
+                    'vm_id' => $vm->id,
+                    'user_id' => $student->id,
+                ],
+                ['assigned_by' => $user?->id],
+            );
+        }
+
+        $this->audit($user?->id, $vm->id, 'dashboard.vm.shared_access.granted', 'Akses shared practical VM diberikan ke siswa.', [
+            'student_ids' => $students->pluck('id')->all(),
+        ]);
+
+        return back()->with('status', 'Akses shared practical diberikan ke '.$students->count().' siswa.');
+    }
+
+    public function revokePracticalAccess(Request $request, Vm $vm): RedirectResponse
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk revoke shared VM.');
+
+        $data = $this->validatePracticalAccessRequest($request);
+        $students = $this->targetStudentsForAccess($data);
+
+        if ($students->isEmpty()) {
+            return back()->withInput()->with('error', 'Pilih minimal satu siswa.');
+        }
+
+        $deleted = $vm->practicalAccesses()
+            ->whereIn('user_id', $students->pluck('id'))
+            ->delete();
+
+        $this->audit($user?->id, $vm->id, 'dashboard.vm.shared_access.revoked', 'Akses shared practical VM dicabut dari siswa.', [
+            'student_ids' => $students->pluck('id')->all(),
+            'deleted' => $deleted,
+        ]);
+
+        return back()->with('status', 'Akses shared practical dicabut dari '.$deleted.' siswa.');
     }
 
     public function updateVmSshMetadata(Request $request, Vm $vm): RedirectResponse
@@ -269,7 +573,7 @@ class DashboardController extends Controller
     private function view(string $section): View
     {
         $user = $this->resolveDashboardUser(request());
-        $localVms = Vm::query()->with(['user', 'labTemplate', 'vmTemplate'])->latest()->get();
+        $localVms = Vm::query()->with(['user', 'labTemplate', 'vmTemplate', 'practicalAccesses.user'])->latest()->get();
         $visibleLocalVms = $this->localVmsForUser($user);
         $realVmResponse = $this->proxmox->listVms();
         $realVms = collect($realVmResponse['data'] ?? [])
@@ -294,6 +598,8 @@ class DashboardController extends Controller
             'realVmResponse' => $realVmResponse,
             'realVms' => $realVms,
             'vmTemplates' => $vmTemplates,
+            'students' => $this->assignableStudents(),
+            'sourceTemplateVms' => $this->sourceTemplateVms(),
             'auditLogs' => AuditLog::with(['user', 'vm'])->latest()->limit(50)->get(),
             'canViewPamMonitoring' => $canViewPamMonitoring,
             'recentCommandLogs' => $canViewPamMonitoring ? $this->recentCommandLogs() : collect(),
@@ -326,7 +632,7 @@ class DashboardController extends Controller
     private function localVmsForUser(?User $user): Collection
     {
         $query = Vm::withTrashed()
-            ->with(['user', 'labTemplate', 'vmTemplate'])
+            ->with(['user', 'labTemplate', 'vmTemplate', 'practicalAccesses.user'])
             ->latest();
 
         // Isolasi VM lokal: siswa hanya melihat resource miliknya, admin/guru untuk supervisi.
@@ -593,9 +899,198 @@ class DashboardController extends Controller
         return match ($user?->role) {
             'admin' => 'admin',
             'guru', 'teacher' => 'guru',
-            'student', 'mahasiswa' => 'student',
+            'student', 'mahasiswa', 'siswa' => 'student',
             default => 'guest',
         };
+    }
+
+    private function canAssignVm(Vm $vm): bool
+    {
+        return ! $vm->trashed() && ! $vm->isSystemVm() && ! $vm->isCritical();
+    }
+
+    private function canSharePracticalVm(Vm $vm): bool
+    {
+        return ! $vm->trashed() && ! $vm->isProtectedVm();
+    }
+
+    private function assignableStudents(): Collection
+    {
+        return User::query()
+            ->whereIn('role', $this->studentRoles())
+            ->orderBy('name')
+            ->get();
+    }
+
+    private function sourceTemplateVms(): Collection
+    {
+        return Vm::query()
+            ->with('user')
+            ->whereNull('deleted_at')
+            ->latest()
+            ->get()
+            ->filter(fn (Vm $vm) => $vm->isUsableManagedTemplate())
+            ->values();
+    }
+
+    private function targetStudentsForBulkGeneration(array $data): Collection
+    {
+        $query = User::query()
+            ->whereIn('role', $this->studentRoles())
+            ->orderBy('name');
+
+        if (($data['target_mode'] ?? null) === 'selected') {
+            $ids = collect($data['student_ids'] ?? [])
+                ->map(fn ($id) => (int) $id)
+                ->filter()
+                ->unique()
+                ->values();
+
+            if ($ids->isEmpty()) {
+                return collect();
+            }
+
+            $query->whereIn('id', $ids);
+        }
+
+        return $query->get();
+    }
+
+    private function validatePracticalAccessRequest(Request $request): array
+    {
+        return $request->validate([
+            'target_mode' => ['required', Rule::in(['all', 'selected'])],
+            'student_ids' => ['array'],
+            'student_ids.*' => [
+                'integer',
+                Rule::exists('users', 'id')->where(fn ($query) => $query->whereIn('role', $this->studentRoles())),
+            ],
+        ]);
+    }
+
+    private function targetStudentsForAccess(array $data): Collection
+    {
+        $query = User::query()
+            ->whereIn('role', $this->studentRoles())
+            ->orderBy('name');
+
+        if (($data['target_mode'] ?? null) === 'selected') {
+            $ids = collect($data['student_ids'] ?? [])
+                ->map(fn ($id) => (int) $id)
+                ->filter()
+                ->unique()
+                ->values();
+
+            if ($ids->isEmpty()) {
+                return collect();
+            }
+
+            $query->whereIn('id', $ids);
+        }
+
+        return $query->get();
+    }
+
+    private function duplicateManagedAssignments(Collection $students, int $sourceTemplateVmid): Collection
+    {
+        return Vm::query()
+            ->with('user')
+            ->whereIn('user_id', $students->pluck('id'))
+            ->whereNull('deleted_at')
+            ->get()
+            ->filter(fn (Vm $vm) => $vm->isManagedAssignment()
+                && (int) ($vm->metadata['source_template_vmid'] ?? 0) === $sourceTemplateVmid)
+            ->values();
+    }
+
+    private function managedVmName(User $student, Vm $sourceVm): string
+    {
+        $username = Str::of($student->email)
+            ->before('@')
+            ->slug('-')
+            ->limit(24, '')
+            ->toString();
+        $templateName = Str::of($sourceVm->name)
+            ->slug('-')
+            ->limit(28, '')
+            ->toString();
+
+        return Str::limit('practical-'.$username.'-'.$templateName, 64, '');
+    }
+
+    private function detectAndStoreSshMetadata(Vm $vm): bool
+    {
+        if ($vm->status !== 'running') {
+            return false;
+        }
+
+        $vmid = $vm->proxmoxVmid();
+
+        if ($vmid === null) {
+            return false;
+        }
+
+        $ip = $this->proxmox->detectGuestIpv4($vm->node, $vmid);
+
+        if ($ip === null) {
+            return false;
+        }
+
+        $vm->forceFill([
+            'metadata' => [
+                ...($vm->metadata ?? []),
+                'ssh_host' => $ip,
+                'ip_address' => $ip,
+                'ssh_port' => $vm->metadata['ssh_port'] ?? 22,
+            ],
+        ])->save();
+
+        return true;
+    }
+
+    private function sshMetadataFromVm(Vm $vm): array
+    {
+        $metadata = [];
+
+        foreach (['ssh_port', 'ssh_username', 'ssh_password', 'ssh_private_key'] as $key) {
+            if (! array_key_exists($key, $vm->metadata ?? [])) {
+                continue;
+            }
+
+            $metadata[$key] = $vm->metadata[$key];
+        }
+
+        return $metadata;
+    }
+
+    private function sshMetadataFromClone(array $clone): array
+    {
+        $metadata = [];
+
+        foreach (['ssh_host', 'ssh_port', 'ssh_username', 'ssh_password', 'ssh_private_key', 'ip_address', 'private_ip', 'public_ip'] as $key) {
+            if (! array_key_exists($key, $clone)) {
+                continue;
+            }
+
+            $value = $clone[$key];
+
+            if (is_string($value)) {
+                $value = trim($value);
+            }
+
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            $metadata[$key] = $value;
+        }
+
+        return $metadata;
+    }
+
+    private function studentRoles(): array
+    {
+        return ['student', 'mahasiswa', 'siswa'];
     }
 
     private function resolveDashboardUser(Request $request): ?User

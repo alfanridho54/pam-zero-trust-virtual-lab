@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Services\TerminalWebSocketCommandService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class TerminalWebSocketServer extends Command
@@ -160,11 +161,12 @@ class TerminalWebSocketServer extends Command
             return;
         }
 
-        $session = TerminalSession::with('vm')->where('session_uuid', $payload['session_uuid'] ?? null)->first();
+        $session = TerminalSession::with('vm.practicalAccesses')->where('session_uuid', $payload['session_uuid'] ?? null)->first();
         $user = User::find($payload['user_id'] ?? null);
 
-        if (! $session || ! $user || ! $session->isOwnedBy($user)) {
+        if (! $session || ! $user || ! $session->canBeAccessedBy($user)) {
             // Ticket hanya valid untuk pemilik sesi; user lain tidak bisa menumpang session_uuid.
+            $this->logWebSocketSessionDenied($session, $user);
             $this->sendClient($clientId, ['type' => 'error', 'message' => 'Terminal websocket session denied.']);
             $this->disconnect($clientId);
 
@@ -205,6 +207,24 @@ class TerminalWebSocketServer extends Command
         if ($result->type !== 'ignored') {
             $this->sendClient($clientId, $result->toPayload());
         }
+    }
+
+    private function logWebSocketSessionDenied(?TerminalSession $session, ?User $user): void
+    {
+        $session?->loadMissing('vm.practicalAccesses');
+        $vm = $session?->vm;
+        $practicalAccessExists = ($session && $user && $vm) ? $vm->hasPracticalAccess($user) : false;
+
+        Log::warning('Terminal websocket session denied.', [
+            'auth_id' => $user?->id,
+            'session_id' => $session?->id,
+            'session_user_id' => $session?->user_id,
+            'session_vm_id' => $session?->vm_id,
+            'vm_user_id' => $vm?->user_id,
+            'shared_practical' => (bool) ($vm?->metadata['shared_practical'] ?? false),
+            'practical_access_exists' => $practicalAccessExists,
+            'can_be_accessed_by' => $session && $user ? $session->canBeAccessedBy($user) : false,
+        ]);
     }
 
     /** @param resource $socket */
