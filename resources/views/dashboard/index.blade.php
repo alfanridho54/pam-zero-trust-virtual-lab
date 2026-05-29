@@ -1,7 +1,7 @@
 @php
     $title = match ($section) {
-        'templates' => 'Akses VM Praktikum',
-        'vms' => 'Kelola Lab Pribadi',
+        'templates' => 'Template Library',
+        'vms' => 'Kelola VM Siswa',
         'audit-logs' => 'Audit Log',
         default => 'Dashboard PAM Proxmox',
     };
@@ -10,32 +10,76 @@
     $statusLabel = fn ($vm) => $vm->trashed() ? 'deleted' : $vm->status;
     $realStatusClass = fn ($status) => $status === 'running' ? 'running' : ($status === 'stopped' ? 'stopped' : 'default');
     $shortSession = fn (?string $uuid) => $uuid ? substr($uuid, 0, 8) : '-';
+    $runningVmCount = $realVms->where('status', 'running')->count();
+    $activeLabCount = $vms->filter(fn ($vm) => ! $vm->trashed() && ($vm->isSharedPractical() || $vm->isManagedAssignment()))->count();
+    $personalSandboxVms = $vms->filter(fn ($vm) => ! $vm->isProtectedVm() && ! $vm->isSharedPractical() && ! $vm->isManagedAssignment())->values();
+    $practicalLabVms = $vms->filter(fn ($vm) => ! $vm->isProtectedVm() && ($vm->isSharedPractical() || $vm->isManagedAssignment()))->values();
+    $infrastructureVms = $vms->filter(fn ($vm) => $vm->isProtectedVm())->values();
+    $auditSeverity = function (string $action): array {
+        if (str_contains($action, 'blocked') || str_contains($action, 'denied') || str_contains($action, 'critical')) {
+            return ['label' => 'BLOCKED', 'type' => 'blocked'];
+        }
+
+        if (str_contains($action, 'terminal') || str_contains($action, 'ssh') || str_contains($action, 'revoked')) {
+            return ['label' => 'SECURITY', 'type' => 'revoked'];
+        }
+
+        if (str_contains($action, 'failed') || str_contains($action, 'mismatch')) {
+            return ['label' => 'WARNING', 'type' => 'stopped'];
+        }
+
+        return ['label' => 'INFO', 'type' => 'allowed'];
+    };
 @endphp
 
 <x-layouts.app :title="$title" :user="$currentUser ?? null">
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6 mb-8">
-        <x-stat-card label="Total Template" :value="$stats['templates']" accent="indigo" />
-        <x-stat-card label="Total VM" :value="$stats['vms']" accent="blue" />
-        <x-stat-card label="Total Audit Log" :value="$stats['auditLogs']" accent="amber" />
-        <x-stat-card label="Total User" :value="$stats['users']" accent="emerald" />
+    <div class="relative isolate mb-8 overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-600 via-indigo-600 to-violet-600 p-6 text-white shadow-lg shadow-indigo-500/20 sm:p-8">
+        <div class="absolute inset-0 z-0 bg-indigo-950/10"></div>
+        <div class="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div class="max-w-3xl">
+                <p class="text-xs font-bold uppercase tracking-wider text-indigo-100">Zero Trust PAM Control Center</p>
+                <h2 class="mt-2 text-3xl font-bold tracking-tight text-white drop-shadow-sm">Privileged lab access, monitored from one place</h2>
+                <p class="mt-3 max-w-2xl text-sm leading-6 text-indigo-100">Provision practical environments, supervise student access, and review terminal activity without exposing low-level SSH controls.</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 lg:justify-end">
+                <span class="inline-flex items-center rounded-full border border-white/25 bg-white/10 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-white/95 shadow-sm backdrop-blur-sm">PAM Protected</span>
+                <span class="inline-flex items-center rounded-full border border-white/25 bg-white/10 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-white/95 shadow-sm backdrop-blur-sm">Audited</span>
+                <span class="inline-flex items-center rounded-full border border-white/25 bg-white/10 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-white/95 shadow-sm backdrop-blur-sm">Secure Gateway</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="mb-8 grid grid-cols-2 gap-4 xl:grid-cols-5">
+        <x-stat-card label="Active Labs" :value="$activeLabCount" accent="purple" />
+        <x-stat-card label="Active Sessions" :value="$activeTerminalSessions->count()" accent="indigo" />
+        <x-stat-card label="Running VMs" :value="$runningVmCount" accent="emerald" />
+        <x-stat-card label="Audited Commands" :value="$recentCommandLogs->count()" accent="amber" />
+        <x-stat-card label="Active Students" :value="$students->count()" accent="blue" />
     </div>
 
     @if ($section === 'overview')
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <x-card>
-                <div class="p-6">
-                    <h3 class="text-base font-semibold text-slate-900">Akses VM Praktikum</h3>
-                    <p class="mt-1 text-sm text-slate-500">Daftar template lab yang disediakan guru untuk simulasi akses praktikum siswa.</p>
-                    <a href="{{ route('dashboard.templates') }}" class="mt-4 inline-flex items-center justify-center rounded-lg bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200 hover:bg-indigo-100">Buka Template</a>
+        <div class="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
+            <a href="{{ route('dashboard.templates') }}" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50/20">
+                <div class="grid h-11 w-11 place-items-center rounded-xl bg-indigo-50 text-indigo-600">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>
                 </div>
-            </x-card>
-            <x-card>
-                <div class="p-6">
-                    <h3 class="text-base font-semibold text-slate-900">Kelola Lab Pribadi</h3>
-                    <p class="mt-1 text-sm text-slate-500">Kelola VM milik user, simulasi perubahan resource, dan soft delete untuk kebutuhan demo.</p>
-                    <a href="{{ route('dashboard.vms') }}" class="mt-4 inline-flex items-center justify-center rounded-lg bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200 hover:bg-indigo-100">Buka VM</a>
+                <h3 class="mt-4 text-base font-semibold text-slate-950">Template Library</h3>
+                <p class="mt-2 text-sm leading-6 text-slate-500">Curated Proxmox sources for student self-service provisioning.</p>
+            </a>
+            <a href="{{ route('dashboard.vms') }}" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50/20">
+                <div class="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M7 4h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>
                 </div>
-            </x-card>
+                <h3 class="mt-4 text-base font-semibold text-slate-950">VM Access Control</h3>
+                <p class="mt-2 text-sm leading-6 text-slate-500">Assign labs, grant access, and open monitored terminal sessions.</p>
+            </a>
+            <a href="{{ route('dashboard.audit-logs') }}" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50/20">
+                <div class="grid h-11 w-11 place-items-center rounded-xl bg-violet-50 text-violet-600">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7 4h10l2 4v10a2 2 0 01-2 2H7a2 2 0 01-2-2V8l2-4z"/></svg>
+                </div>
+                <h3 class="mt-4 text-base font-semibold text-slate-950">Audit Intelligence</h3>
+                <p class="mt-2 text-sm leading-6 text-slate-500">Review security-relevant VM, terminal, and dashboard actions.</p>
+            </a>
         </div>
     @endif
 
@@ -51,7 +95,6 @@
                     <input name="cpu" value="{{ old('cpu', 1) }}" placeholder="CPU" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
                     <input name="ram" value="{{ old('ram', 1024) }}" placeholder="RAM MB" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
                     <input name="disk" value="{{ old('disk', 10) }}" placeholder="Disk GB" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
-                    <input name="ssh_password" type="password" placeholder="SSH password" class="min-h-10 rounded-lg border border-slate-300 px-3 text-sm">
                     <textarea name="description" placeholder="Description" class="rounded-lg border border-slate-300 px-3 py-2 text-sm lg:col-span-3">{{ old('description') }}</textarea>
                     <label class="inline-flex min-h-10 items-center gap-2 text-sm font-semibold text-slate-700">
                         <input type="checkbox" name="enabled" value="1" checked class="rounded border-slate-300">
@@ -108,7 +151,6 @@
                                                 <input name="cpu" value="{{ $template->cpu }}" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
                                                 <input name="ram" value="{{ $template->ram }}" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
                                                 <input name="disk" value="{{ $template->disk }}" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
-                                                <input name="ssh_password" type="password" placeholder="New SSH password" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
                                                 <textarea name="description" rows="2" class="rounded-md border border-slate-300 px-2 py-2 text-xs sm:col-span-2">{{ $template->description }}</textarea>
                                                 <label class="inline-flex items-center gap-2 text-xs font-semibold text-slate-700">
                                                     <input type="checkbox" name="enabled" value="1" @checked($template->enabled) class="rounded border-slate-300">
@@ -224,10 +266,10 @@
                                         @if ($vm['local_vm_id'])
                                             <form method="POST" action="{{ route('terminal-sessions.store', $vm['local_vm_id']) }}">
                                                 @csrf
-                                                <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $vm['can_control'])>Terminal</button>
+                                                <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $vm['can_control'])>Open Terminal</button>
                                             </form>
                                         @else
-                                            <button type="button" disabled class="inline-flex items-center justify-center rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400 cursor-not-allowed">Terminal</button>
+                                            <button type="button" disabled class="inline-flex cursor-not-allowed items-center justify-center rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-400">Open Terminal</button>
                                         @endif
                                     </div>
                                 </td>
@@ -242,7 +284,7 @@
             </div>
         </x-card>
 
-        @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
+        <!-- @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
             <x-card title="Bulk Managed Practical VM" subtitle="Clone one practical VM per selected siswa from a safe source template VM." class="mb-8">
                 <form method="POST" action="{{ route('dashboard.vms.bulk-managed-generation.store') }}" class="grid gap-4 p-6 lg:grid-cols-[minmax(14rem,1fr)_minmax(14rem,1fr)_auto]">
                     @csrf
@@ -283,182 +325,74 @@
                     </button>
                 </form>
             </x-card>
-        @endif
+        @endif -->
 
-        <x-card title="VM Lokal Demo" subtitle="Data lokal untuk simulasi ownership, quota, RBAC, dan audit lama." class="mb-8">
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-slate-100">
-                    <thead>
-                        <tr class="bg-slate-50/50">
-                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">VM</th>
-                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Owner</th>
-                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Template</th>
-                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">CPU</th>
-                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">RAM</th>
-                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Disk</th>
-                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
-                            <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Aksi</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-100">
-                        @forelse ($vms as $vm)
-                            @php
-                                $isCriticalVm = $vm->isCritical();
-                                $isSystemVm = $vm->isSystemVm();
-                                $isProtectedVm = $vm->isProtectedVm();
-                                $canAssignVm = ! $vm->trashed() && ! $isSystemVm && ! $isCriticalVm;
-                                $terminalBlocked = $vm->trashed() || $isProtectedVm;
-                            @endphp
-                            <tr class="hover:bg-slate-50/50 transition-colors">
-                                <td class="px-6 py-4 text-sm">
-                                    <span class="font-medium text-slate-900">{{ $vm->name }}</span>
-                                    <p class="text-xs text-slate-400">{{ $vm->proxmox_id }}</p>
-                                </td>
-                                <td class="px-6 py-4 text-sm">
-                                    {{ $isSystemVm ? 'System VM' : ($vm->user?->name ?? '-') }}
-                                    @if (! $isSystemVm)
-                                        <p class="text-xs text-slate-400">owner_id={{ $vm->user_id }}</p>
-                                    @endif
-                                    @if ($vm->isSharedPractical())
-                                        <div class="mt-2">
-                                            <x-badge type="owned">Shared practical</x-badge>
-                                            <p class="mt-1 text-xs text-slate-500">{{ $vm->practicalAccesses->count() }} siswa access</p>
-                                            @if ($vm->practicalAccesses->isNotEmpty())
-                                                <p class="mt-1 max-w-[18rem] text-xs text-slate-400">
-                                                    {{ $vm->practicalAccesses->pluck('user.name')->filter()->join(', ') }}
-                                                </p>
-                                            @endif
-                                        </div>
-                                    @endif
-                                </td>
-                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->vmTemplate?->name ?? $vm->labTemplate?->name ?? 'Lab Pribadi' }}</td>
-                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->cpu_cores }} core</td>
-                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->memory_mb }} MB</td>
-                                <td class="px-6 py-4 text-sm text-slate-600">{{ $vm->disk_gb }} GB</td>
-                                <td class="px-6 py-4">
-                                    <x-badge :type="$statusClass($vm)">{{ $statusLabel($vm) }}</x-badge>
-                                    @if ($isSystemVm)
-                                        <div class="mt-1"><x-badge type="system">System VM</x-badge></div>
-                                    @elseif ($isCriticalVm)
-                                        <div class="mt-1"><x-badge type="critical">Critical</x-badge></div>
-                                    @endif
-                                </td>
-                                <td class="px-6 py-4">
-                                    <div class="flex flex-wrap gap-2">
-                                        <form method="POST" action="{{ route('dashboard.simulate.vm.resources', $vm) }}">
-                                            @csrf
-                                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled($vm->trashed() || $isProtectedVm)>Edit Resource</button>
-                                        </form>
-                                        <form method="POST" action="{{ route('dashboard.simulate.vm.delete', $vm) }}">
-                                            @csrf
-                                            @method('DELETE')
-                                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-inset ring-red-200 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled($vm->trashed() || $isProtectedVm)>Soft Delete</button>
-                                        </form>
-                                        <form method="POST" action="{{ route('terminal-sessions.store', $vm) }}">
-                                            @csrf
-                                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed" @disabled($terminalBlocked)>Terminal</button>
-                                        </form>
-                                        @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
-                                            <details class="basis-full">
-                                                <summary class="cursor-pointer text-xs font-semibold text-slate-600 hover:text-slate-900">Shared practical access</summary>
-                                                <div class="mt-3 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                                    <div class="flex flex-wrap gap-2">
-                                                        @if (! $vm->isSharedPractical())
-                                                            <form method="POST" action="{{ route('dashboard.vms.shared-practical.store', $vm) }}">
-                                                                @csrf
-                                                                <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $canAssignVm)>Mark shared</button>
-                                                            </form>
-                                                        @else
-                                                            <form method="POST" action="{{ route('dashboard.vms.shared-practical.destroy', $vm) }}">
-                                                                @csrf
-                                                                @method('DELETE')
-                                                                <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-red-50 px-3 text-xs font-semibold text-red-700 ring-1 ring-inset ring-red-200 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $canAssignVm)>Unmark shared</button>
-                                                            </form>
-                                                        @endif
-                                                    </div>
-                                                    <form method="POST" action="{{ route('dashboard.vms.practical-accesses.store', $vm) }}" class="grid gap-2 sm:grid-cols-[10rem_minmax(14rem,1fr)_auto]">
-                                                        @csrf
-                                                        <select name="target_mode" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs" @disabled(! $canAssignVm)>
-                                                            <option value="all">Semua siswa</option>
-                                                            <option value="selected">Siswa terpilih</option>
-                                                        </select>
-                                                        <select name="student_ids[]" multiple size="3" class="rounded-md border border-slate-300 px-2 py-2 text-xs" @disabled(! $canAssignVm || $students->isEmpty())>
-                                                            @foreach ($students as $student)
-                                                                <option value="{{ $student->id }}" @selected($vm->practicalAccesses->contains('user_id', $student->id))>{{ $student->name }} ({{ $student->email }})</option>
-                                                            @endforeach
-                                                        </select>
-                                                        <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $canAssignVm || $students->isEmpty())>Grant</button>
-                                                    </form>
-                                                    <form method="POST" action="{{ route('dashboard.vms.practical-accesses.destroy', $vm) }}" class="grid gap-2 sm:grid-cols-[10rem_minmax(14rem,1fr)_auto]">
-                                                        @csrf
-                                                        @method('DELETE')
-                                                        <select name="target_mode" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs" @disabled(! $canAssignVm)>
-                                                            <option value="selected">Siswa terpilih</option>
-                                                            <option value="all">Semua siswa</option>
-                                                        </select>
-                                                        <select name="student_ids[]" multiple size="3" class="rounded-md border border-slate-300 px-2 py-2 text-xs" @disabled(! $canAssignVm || $vm->practicalAccesses->isEmpty())>
-                                                            @foreach ($vm->practicalAccesses as $access)
-                                                                <option value="{{ $access->user_id }}" selected>{{ $access->user?->name ?? 'user_id='.$access->user_id }}</option>
-                                                            @endforeach
-                                                        </select>
-                                                        <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-slate-100 px-3 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $canAssignVm || $vm->practicalAccesses->isEmpty())>Revoke</button>
-                                                    </form>
-                                                </div>
-                                            </details>
-                                            <details class="basis-full">
-                                                <summary class="cursor-pointer text-xs font-semibold text-slate-600 hover:text-slate-900">Assign siswa</summary>
-                                                <div class="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[minmax(12rem,1fr)_auto]">
-                                                    <form method="POST" action="{{ route('dashboard.vms.assignment.store', $vm) }}" class="contents">
-                                                        @csrf
-                                                        <select name="student_id" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs" @disabled(! $canAssignVm || $students->isEmpty())>
-                                                            <option value="">Pilih siswa</option>
-                                                            @foreach ($students as $student)
-                                                                <option value="{{ $student->id }}" @selected($vm->user_id === $student->id)>
-                                                                    {{ $student->name }} ({{ $student->email }})
-                                                                </option>
-                                                            @endforeach
-                                                        </select>
-                                                        <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed" @disabled(! $canAssignVm || $students->isEmpty())>Assign</button>
-                                                    </form>
-                                                    <form method="POST" action="{{ route('dashboard.vms.assignment.destroy', $vm) }}" class="sm:col-span-2">
-                                                        @csrf
-                                                        @method('DELETE')
-                                                        <button type="submit" class="text-xs font-semibold text-red-600 hover:text-red-700 disabled:text-slate-400 disabled:cursor-not-allowed" @disabled(! $canAssignVm || $vm->user_id === null)>Unassign</button>
-                                                    </form>
-                                                </div>
-                                            </details>
-                                            <form method="POST" action="{{ route('dashboard.vms.ssh-metadata.refresh', $vm) }}">
-                                                @csrf
-                                                <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed" @disabled($vm->trashed())>Refresh SSH Metadata</button>
-                                            </form>
-                                            <details class="basis-full">
-                                                <summary class="cursor-pointer text-xs font-semibold text-slate-600 hover:text-slate-900">SSH metadata</summary>
-                                                <form method="POST" action="{{ route('dashboard.vms.ssh-metadata.update', $vm) }}" class="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
-                                                    @csrf
-                                                    <input name="ssh_host" value="{{ $vm->metadata['ssh_host'] ?? '' }}" placeholder="ssh_host" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
-                                                    <input name="ip_address" value="{{ $vm->metadata['ip_address'] ?? '' }}" placeholder="ip_address" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
-                                                    <input name="private_ip" value="{{ $vm->metadata['private_ip'] ?? '' }}" placeholder="private_ip" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
-                                                    <input name="public_ip" value="{{ $vm->metadata['public_ip'] ?? '' }}" placeholder="public_ip" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
-                                                    <input name="ssh_port" value="{{ $vm->metadata['ssh_port'] ?? '' }}" placeholder="ssh_port" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
-                                                    <input name="ssh_username" value="{{ $vm->metadata['ssh_username'] ?? '' }}" placeholder="ssh_username" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
-                                                    <input name="ssh_password" type="password" placeholder="ssh_password" class="min-h-9 rounded-md border border-slate-300 px-2 text-xs">
-                                                    <textarea name="ssh_private_key" rows="2" placeholder="ssh_private_key" class="rounded-md border border-slate-300 px-2 py-2 text-xs sm:col-span-2"></textarea>
-                                                    <button type="submit" class="inline-flex min-h-9 items-center justify-center rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 sm:col-span-2">Save SSH metadata</button>
-                                                </form>
-                                            </details>
-                                        @endif
-                                    </div>
-                                </td>
-                            </tr>
-                        @empty
-                            <tr>
-                                <td colspan="8" class="px-6 py-8 text-center text-sm text-slate-500">Belum ada VM lokal. Gunakan tombol Create Docker Lab.</td>
-                            </tr>
-                        @endforelse
-                    </tbody>
-                </table>
+        <section class="mb-8 space-y-6">
+            <div class="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-5">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h3 class="text-base font-semibold text-slate-950">Secure Connection</h3>
+                        <p class="mt-1 text-sm text-slate-600">SSH connection is managed automatically through PAM.</p>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <span class="rounded-full bg-white px-3 py-1 text-xs font-bold text-indigo-700 ring-1 ring-indigo-200">PAM Protected</span>
+                        <span class="rounded-full bg-white px-3 py-1 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">Audited</span>
+                        <span class="rounded-full bg-white px-3 py-1 text-xs font-bold text-violet-700 ring-1 ring-violet-200">Secure Gateway</span>
+                    </div>
+                </div>
             </div>
-        </x-card>
+
+            <div>
+                <div class="mb-4 flex items-end justify-between gap-4">
+                    <div>
+                        <h3 class="text-base font-semibold text-slate-950">Practical Labs</h3>
+                        <p class="mt-1 text-sm text-slate-500">Shared multi-user VM environments for supervised practice.</p>
+                    </div>
+                    <span class="rounded-full bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-700">{{ $practicalLabVms->count() }} labs</span>
+                </div>
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                    @forelse ($practicalLabVms as $vm)
+                        @include('dashboard.partials.admin-vm-card', ['vm' => $vm, 'students' => $students, 'statusClass' => $statusClass, 'statusLabel' => $statusLabel])
+                    @empty
+                        <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500 xl:col-span-2">No practical labs have been configured yet.</div>
+                    @endforelse
+                </div>
+            </div>
+
+            <div>
+                <div class="mb-4 flex items-end justify-between gap-4">
+                    <div>
+                        <h3 class="text-base font-semibold text-slate-950">Personal Sandbox VMs</h3>
+                        <p class="mt-1 text-sm text-slate-500">Self-service student-created VMs and individually assigned labs.</p>
+                    </div>
+                    <span class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">{{ $personalSandboxVms->count() }} sandboxes</span>
+                </div>
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                    @forelse ($personalSandboxVms as $vm)
+                        @include('dashboard.partials.admin-vm-card', ['vm' => $vm, 'students' => $students, 'statusClass' => $statusClass, 'statusLabel' => $statusLabel])
+                    @empty
+                        <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500 xl:col-span-2">No personal sandbox VMs are available.</div>
+                    @endforelse
+                </div>
+            </div>
+
+            <div>
+                <div class="mb-4 flex items-end justify-between gap-4">
+                    <div>
+                        <h3 class="text-base font-semibold text-slate-950">Critical/System Infrastructure</h3>
+                        <p class="mt-1 text-sm text-slate-500">Protected internal VMs that are visible for monitoring but blocked from unsafe actions.</p>
+                    </div>
+                    <span class="rounded-full bg-red-50 px-3 py-1 text-xs font-bold text-red-700">{{ $infrastructureVms->count() }} protected</span>
+                </div>
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                    @forelse ($infrastructureVms as $vm)
+                        @include('dashboard.partials.admin-vm-card', ['vm' => $vm, 'students' => $students, 'statusClass' => $statusClass, 'statusLabel' => $statusLabel])
+                    @empty
+                        <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500 xl:col-span-2">No protected infrastructure records are visible.</div>
+                    @endforelse
+                </div>
+            </div>
+        </section>
     @endif
 
     @if (in_array($section, ['overview', 'audit-logs'], true))
@@ -617,50 +551,55 @@
             <div class="border-b border-slate-100 px-6 py-5">
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                        <h2 class="text-base font-semibold text-slate-950">Audit Log</h2>
-                        <p class="mt-1 text-sm text-slate-500">Aktivitas penting dari API dan dashboard mock.</p>
+                        <h2 class="text-base font-semibold text-slate-950">Audit Logs</h2>
+                        <p class="mt-1 text-sm text-slate-500">Security-relevant VM, terminal, and dashboard activity.</p>
                     </div>
                     <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
                         <span class="font-semibold text-slate-900">{{ $auditLogs->count() }}</span> latest entries
                     </div>
                 </div>
             </div>
-            <div class="overflow-x-auto">
+            <div class="max-h-[34rem] overflow-auto">
                 <table class="min-w-full divide-y divide-slate-100">
-                    <thead class="bg-slate-50">
+                    <thead class="sticky top-0 z-10 bg-slate-50">
                         <tr>
-                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">User</th>
-                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Action</th>
-                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Description</th>
-                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">VM</th>
-                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Created At</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Severity</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">User</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Action</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Description</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">VM</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Created</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
                         @forelse ($auditLogs as $log)
+                            @php($severity = $auditSeverity($log->action))
                             <tr class="bg-white transition hover:bg-slate-50">
-                                <td class="whitespace-nowrap px-6 py-4 text-sm">
+                                <td class="whitespace-nowrap px-5 py-3">
+                                    <x-badge :type="$severity['type']">{{ $severity['label'] }}</x-badge>
+                                </td>
+                                <td class="whitespace-nowrap px-5 py-3 text-sm">
                                     <span class="font-semibold text-slate-900">{{ $log->user?->name ?? '-' }}</span>
                                     @if ($log->user?->email)
                                         <p class="mt-0.5 text-xs text-slate-500">{{ $log->user->email }}</p>
                                     @endif
                                 </td>
-                                <td class="px-6 py-4">
-                                    <x-badge type="allowed">{{ $log->action }}</x-badge>
+                                <td class="px-5 py-3">
+                                    <span class="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200">{{ $log->action }}</span>
                                 </td>
-                                <td class="max-w-xl px-6 py-4 text-sm leading-6 text-slate-700">
+                                <td class="max-w-xl px-5 py-3 text-sm leading-6 text-slate-700">
                                     {{ $log->description }}
                                 </td>
-                                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600">
+                                <td class="whitespace-nowrap px-5 py-3 text-sm text-slate-600">
                                     {{ $log->vm?->name ?? '-' }}
                                 </td>
-                                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500">
+                                <td class="whitespace-nowrap px-5 py-3 font-mono text-xs text-slate-500">
                                     {{ $log->created_at?->format('Y-m-d H:i') }}
                                 </td>
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="5" class="px-6 py-8 text-center text-sm text-slate-500">Belum ada audit log.</td>
+                                <td colspan="6" class="px-6 py-8 text-center text-sm text-slate-500">Belum ada audit log.</td>
                             </tr>
                         @endforelse
                     </tbody>

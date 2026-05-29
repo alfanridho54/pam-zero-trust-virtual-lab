@@ -7,10 +7,10 @@
         : 'ST';
 
     $navItems = [
-        ['label' => 'Dashboard', 'route' => 'dashboard', 'active' => request()->routeIs('dashboard')],
+        ['label' => 'Dashboard', 'route' => 'student.dashboard', 'active' => request()->routeIs('student.dashboard') || request()->routeIs('dashboard')],
         ['label' => 'My Virtual Machines', 'route' => 'student.vms.index', 'active' => request()->routeIs('student.vms.*')],
-        ['label' => 'Activity History', 'route' => 'dashboard.audit-logs', 'active' => request()->routeIs('dashboard.audit-logs')],
-        ['label' => 'Help / Lab Guide', 'route' => 'dashboard.templates', 'active' => request()->routeIs('dashboard.templates')],
+        ['label' => 'Activity History', 'route' => 'student.activity-history', 'active' => request()->routeIs('student.activity-history')],
+        ['label' => 'Help / Lab Guide', 'route' => 'student.lab-guide', 'active' => request()->routeIs('student.lab-guide')],
     ];
 @endphp
 
@@ -79,9 +79,39 @@
                         @endif
                     </div>
                     <div class="flex items-center gap-3">
-                        <a href="{{ route('dashboard.templates') }}" class="hidden text-xs font-semibold text-slate-500 hover:text-slate-950 sm:inline">
+                        <a href="{{ route('student.lab-guide') }}" class="hidden text-xs font-semibold text-slate-500 hover:text-slate-950 sm:inline">
                             Need help?
                         </a>
+                        @if ($displayUser)
+                            <details class="relative">
+                                <summary class="flex h-10 cursor-pointer list-none items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50/40 hover:text-indigo-700 [&::-webkit-details-marker]:hidden">
+                                    <span class="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-indigo-100 text-[11px] font-bold text-indigo-700">
+                                        {{ strtoupper($initials) }}
+                                    </span>
+                                    <span class="hidden max-w-36 truncate sm:inline">{{ $displayUser->name }}</span>
+                                    <svg class="hidden h-4 w-4 text-slate-400 sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m6 9 6 6 6-6"/>
+                                    </svg>
+                                </summary>
+                                <div class="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl shadow-slate-950/10">
+                                    <div class="border-b border-slate-100 px-4 py-3">
+                                        <p class="truncate text-sm font-bold text-slate-950">{{ $displayUser->name }}</p>
+                                        <span class="mt-2 inline-flex rounded-full bg-indigo-50 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-indigo-700">
+                                            {{ $displayUser->role ?? 'student' }}
+                                        </span>
+                                    </div>
+                                    <form method="POST" action="{{ route('logout') }}" class="p-2">
+                                        @csrf
+                                        <button type="submit" class="flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-indigo-50 hover:text-indigo-700">
+                                            <span>Logout</span>
+                                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H3m12 0-4-4m4 4-4 4M21 5v14a2 2 0 0 1-2 2h-6m0-18h6a2 2 0 0 1 2 2"/>
+                                            </svg>
+                                        </button>
+                                    </form>
+                                </div>
+                            </details>
+                        @endif
                         <label for="student-nav-toggle" class="grid h-10 w-10 cursor-pointer place-items-center rounded-lg border border-slate-200 text-slate-600 lg:hidden" aria-label="Open navigation">
                             <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
                         </label>

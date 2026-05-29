@@ -2,7 +2,8 @@
     $studentVm = $vms->first();
     $studentRealVm = $realVms->firstWhere('ownership_status', 'owned') ?? $realVms->first();
     $vmName = $studentRealVm['name'] ?? $studentVm?->name ?? 'Practical Linux VM';
-    $vmStatus = $studentRealVm['status'] ?? $studentVm?->status ?? 'pending';
+    $isSharedDisplayVm = $studentVm && $currentUser && $studentVm->user_id !== $currentUser->id && $studentVm->hasPracticalAccess($currentUser);
+    $vmStatus = $studentRealVm['status'] ?? ($isSharedDisplayVm ? 'unknown' : ($studentVm?->status ?? 'pending'));
     $isRunning = $vmStatus === 'running';
     $cpu = $studentRealVm['cpu'] ?? ($studentVm ? $studentVm->cpu_cores . ' core' : '-');
     $memory = $studentRealVm['memory_usage'] ?? ($studentVm ? $studentVm->memory_mb . ' MB' : '-');
@@ -52,7 +53,7 @@
                                 Open Terminal
                             </button>
                         @endif
-                        <a href="{{ route('dashboard.templates') }}" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-white/30 px-4 text-sm font-bold text-white transition hover:bg-white/10">
+                        <a href="{{ route('student.lab-guide') }}" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-white/30 px-4 text-sm font-bold text-white transition hover:bg-white/10">
                             View Lab Guide
                         </a>
                     </div>
@@ -151,7 +152,7 @@
                             </li>
                         @endforeach
                     </ol>
-                    <a href="{{ route('dashboard.templates') }}" class="mt-5 inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-700">Open full lab guide</a>
+                    <a href="{{ route('student.lab-guide') }}" class="mt-5 inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-700">Open full lab guide</a>
                 </div>
 
                 <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">

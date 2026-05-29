@@ -180,6 +180,90 @@ class DynamicVmTerminalAccessTest extends TestCase
         ]);
     }
 
+    public function test_metadata_only_ssh_credentials_mark_terminal_ready_without_waiting_message(): void
+    {
+        $student = $this->student();
+        $vm = $this->studentVm($student, [
+            'status' => 'running',
+            'metadata' => [
+                'provisioning' => 'template-clone',
+                'vmid' => 2417,
+                'ip_address' => '10.10.10.32',
+                'ssh_username' => 'metadata-user',
+                'ssh_password' => 'metadata-secret',
+            ],
+        ]);
+
+        $this->app->instance(SshReadinessService::class, new class extends SshReadinessService
+        {
+            public function waitUntilReachable(string $host, int $port, ?int $attempts = null, ?int $delayMilliseconds = null, ?float $timeoutSeconds = null): bool
+            {
+                return false;
+            }
+        });
+
+        $this->actingAs($student)
+            ->post(route('terminal-sessions.store', $vm))
+            ->assertRedirect()
+            ->assertSessionHas('status', 'Terminal session dibuat. SSH siap digunakan.');
+
+        $terminalSession = TerminalSession::where('vm_id', $vm->id)->firstOrFail();
+
+        $this->assertSame('10.10.10.32', $terminalSession->ssh_host);
+        $this->assertSame('metadata-user', $terminalSession->ssh_username);
+        $this->assertTrue($terminalSession->metadata['ssh_ready']);
+
+        $this->actingAs($student)
+            ->get(route('terminal-sessions.show', $terminalSession))
+            ->assertOk()
+            ->assertDontSee('SSH is still starting inside this VM.');
+    }
+
+    public function test_terminal_page_recovers_false_readiness_when_vm_metadata_credentials_are_complete(): void
+    {
+        $student = $this->student();
+        $vm = $this->studentVm($student, [
+            'status' => 'running',
+            'metadata' => [
+                'provisioning' => 'template-clone',
+                'vmid' => 2418,
+                'ssh_host' => '10.10.10.33',
+                'ssh_username' => 'metadata-user',
+                'ssh_password' => 'metadata-secret',
+            ],
+        ]);
+        $terminalSession = TerminalSession::create([
+            'user_id' => $student->id,
+            'vm_id' => $vm->id,
+            'node' => $vm->node,
+            'proxmox_id' => $vm->proxmox_id,
+            'vmid' => $vm->proxmoxVmid(),
+            'ssh_host' => '10.10.10.33',
+            'ssh_port' => 22,
+            'ssh_username' => 'metadata-user',
+            'status' => TerminalSessionStatus::Pending,
+            'started_at' => now(),
+            'last_activity_at' => now(),
+            'expires_at' => now()->addMinutes(30),
+            'metadata' => ['ssh_ready' => false],
+        ]);
+
+        $this->app->instance(SshReadinessService::class, new class extends SshReadinessService
+        {
+            public function waitUntilReachable(string $host, int $port, ?int $attempts = null, ?int $delayMilliseconds = null, ?float $timeoutSeconds = null): bool
+            {
+                return false;
+            }
+        });
+
+        $this->actingAs($student)
+            ->get(route('terminal-sessions.show', $terminalSession))
+            ->assertOk()
+            ->assertDontSee('SSH is still starting inside this VM.');
+
+        $this->assertTrue($terminalSession->refresh()->metadata['ssh_ready']);
+    }
+
     public function test_provisioned_vm_using_private_ip_fallback_can_open_terminal(): void
     {
         $student = $this->student();

@@ -163,17 +163,22 @@ class Vm extends Model
 
     public function sshHost(): ?string
     {
+        return $this->getResolvedSshHost();
+    }
+
+    public function getResolvedSshHost(): ?string
+    {
         $metadata = $this->sshMetadataArray();
-        $host = $this->localSshAttribute('ssh_host')
-            ?? $this->localSshAttribute('ip_address')
-            ?? $this->localSshAttribute('private_ip')
-            ?? $this->localSshAttribute('public_ip')
-            ?? $metadata['target_host']
-            ?? $metadata['ssh_host']
-            ?? $metadata['ip']
+        $host = $metadata['ssh_host']
             ?? $metadata['ip_address']
+            ?? $this->localSshAttribute('ssh_host')
+            ?? $this->localSshAttribute('ip_address')
+            ?? $metadata['target_host']
+            ?? $metadata['ip']
             ?? $metadata['private_ip']
             ?? $metadata['public_ip']
+            ?? $this->localSshAttribute('private_ip')
+            ?? $this->localSshAttribute('public_ip')
             ?? null;
 
         return is_string($host) && trim($host) !== '' ? trim($host) : null;
@@ -194,12 +199,17 @@ class Vm extends Model
 
     public function sshUsername(): string
     {
+        return $this->getResolvedSshUsername();
+    }
+
+    public function getResolvedSshUsername(): string
+    {
         $metadata = $this->sshMetadataArray();
 
         return (string) (
-            $this->localSshAttribute('ssh_username')
+            $metadata['ssh_username']
+            ?? $this->localSshAttribute('ssh_username')
             ?? $metadata['target_username']
-            ?? $metadata['ssh_username']
             ?? config('services.terminal.target_username')
             ?? 'student'
         );
@@ -207,9 +217,14 @@ class Vm extends Model
 
     public function sshPassword(): ?string
     {
+        return $this->getResolvedSshPassword();
+    }
+
+    public function getResolvedSshPassword(): ?string
+    {
         $metadata = $this->sshMetadataArray();
-        $password = $this->localSshAttribute('ssh_password')
-            ?? $metadata['ssh_password']
+        $password = $metadata['ssh_password']
+            ?? $this->localSshAttribute('ssh_password')
             ?? null;
 
         return is_string($password) && $password !== '' ? $password : null;
@@ -227,7 +242,14 @@ class Vm extends Model
 
     public function hasSshMetadata(): bool
     {
-        return $this->sshHost() !== null;
+        return $this->getResolvedSshHost() !== null;
+    }
+
+    public function hasResolvedSshCredentials(): bool
+    {
+        return $this->getResolvedSshHost() !== null
+            && $this->getResolvedSshUsername() !== ''
+            && ($this->getResolvedSshPassword() !== null || $this->sshPrivateKey() !== null);
     }
 
     public function isStudentVisible(): bool

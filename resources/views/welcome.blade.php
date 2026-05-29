@@ -20,9 +20,7 @@
             @auth
                 <a href="{{ url('/dashboard') }}" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Dashboard</a>
             @else
-                @if (Route::has('login'))
-                    <a href="{{ route('login') }}" class="text-sm font-medium text-slate-300 hover:text-white transition-colors">Log in</a>
-                @endif
+                <a href="{{ route('dashboard') }}" class="text-sm font-medium text-slate-300 hover:text-white transition-colors">Open Dashboard</a>
                 @if (Route::has('register'))
                     <a href="{{ route('register') }}" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Register</a>
                 @endif
@@ -39,9 +37,7 @@
                 @auth
                     <a href="{{ url('/dashboard') }}" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 w-full sm:w-auto">Go to Dashboard</a>
                 @else
-                    @if (Route::has('login'))
-                        <a href="{{ route('login') }}" class="inline-flex items-center justify-center rounded-lg bg-slate-800 px-6 py-3 text-sm font-semibold text-slate-200 ring-1 ring-inset ring-slate-700 hover:bg-slate-700 hover:text-white w-full sm:w-auto">Log in</a>
-                    @endif
+                    <a href="{{ route('dashboard') }}" class="inline-flex items-center justify-center rounded-lg bg-slate-800 px-6 py-3 text-sm font-semibold text-slate-200 ring-1 ring-inset ring-slate-700 hover:bg-slate-700 hover:text-white w-full sm:w-auto">Open Dashboard</a>
                     @if (Route::has('register'))
                         <a href="{{ route('register') }}" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 w-full sm:w-auto">Get Started</a>
                     @endif

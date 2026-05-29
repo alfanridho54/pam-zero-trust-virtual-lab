@@ -4,11 +4,13 @@ namespace Tests\Feature;
 
 use App\Enums\CommandLogStatus;
 use App\Enums\TerminalSessionStatus;
+use App\Models\AuditLog;
 use App\Models\CommandLog;
 use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Auth;
 use Tests\TestCase;
 
 class DashboardTest extends TestCase
@@ -19,37 +21,189 @@ class DashboardTest extends TestCase
     {
         $this->seed();
 
-        $this->get('/dashboard')
+        $admin = User::where('email', 'admin@lab.test')->firstOrFail();
+
+        $this->actingAs($admin)
+            ->get('/dashboard')
             ->assertOk()
             ->assertSee('Dashboard PAM Proxmox')
-            ->assertSee('Akses VM Praktikum')
-            ->assertSee('Kelola Lab Pribadi');
+            ->assertSee('Template Library')
+            ->assertSee('VM Access Control');
 
-        $this->get('/dashboard/templates')
+        $this->actingAs($admin)
+            ->get('/dashboard/templates')
             ->assertOk()
             ->assertSee('Linux Basic')
             ->assertSee('Docker Lab');
 
-        $this->get('/dashboard/vms')
+        $this->actingAs($admin)
+            ->get('/dashboard/vms')
             ->assertOk()
             ->assertSee('Virtual Machine');
 
-        $this->get('/dashboard/audit-logs')
+        $this->actingAs($admin)
+            ->get('/dashboard/audit-logs')
             ->assertOk()
             ->assertSee('Audit Log');
+    }
+
+    public function test_logout_uses_post_and_requires_cloudflare_or_session_again(): void
+    {
+        $this->seed();
+
+        $admin = User::where('email', 'admin@lab.test')->firstOrFail();
+
+        $this->actingAs($admin)
+            ->get(route('dashboard'))
+            ->assertOk()
+            ->assertSee('Logout');
+
+        $this->post(route('logout'))
+            ->assertRedirect(route('signed-out'));
+
+        $this->assertGuest();
+
+        $this->get(route('dashboard'))
+            ->assertRedirect('/');
+    }
+
+    public function test_signed_out_page_does_not_recreate_user_from_cloudflare_header(): void
+    {
+        $this->withHeader('Cf-Access-Authenticated-User-Email', 'signed-out-student@example.test')
+            ->get(route('signed-out'))
+            ->assertOk()
+            ->assertSee('You have been signed out from PAM Virtual Lab.')
+            ->assertSee('If Cloudflare Access session is still active, reopening the app may sign you in again.');
+
+        $this->assertDatabaseMissing('users', [
+            'email' => 'signed-out-student@example.test',
+        ]);
+    }
+
+    public function test_root_redirects_authenticated_users_to_role_dashboard(): void
+    {
+        $this->seed();
+
+        $admin = User::where('email', 'admin@lab.test')->firstOrFail();
+        $student = User::where('email', 'siswa1@lab.test')->firstOrFail();
+
+        $this->actingAs($admin)
+            ->get('/')
+            ->assertRedirect(route('dashboard'));
+
+        Auth::logout();
+
+        $this->actingAs($student)
+            ->get('/')
+            ->assertRedirect(route('student.dashboard'));
+    }
+
+    public function test_root_uses_cloudflare_access_identity_as_dashboard_entry(): void
+    {
+        $this->seed();
+
+        $admin = User::where('email', 'admin@lab.test')->firstOrFail();
+
+        $this->withHeader('Cf-Access-Authenticated-User-Email', $admin->email)
+            ->get('/')
+            ->assertRedirect(route('dashboard'));
+
+        $this->withHeader('Cf-Access-Authenticated-User-Email', 'cloudflare-student@example.test')
+            ->get('/')
+            ->assertRedirect(route('student.dashboard'));
+
+        $this->assertDatabaseHas('users', [
+            'email' => 'cloudflare-student@example.test',
+            'role' => 'student',
+        ]);
+    }
+
+    public function test_student_activity_history_is_separate_from_admin_audit_logs(): void
+    {
+        $this->seed();
+
+        $student = User::where('email', 'siswa1@lab.test')->firstOrFail();
+        $otherStudent = User::where('email', 'siswa2@lab.test')->firstOrFail();
+        $vm = $this->createVmForOwner($student, 'Student Activity VM');
+        $otherVm = $this->createVmForOwner($otherStudent, 'Other Student Activity VM');
+        $terminalSession = $this->createTerminalSession($student, $vm);
+
+        AuditLog::create([
+            'user_id' => $student->id,
+            'vm_id' => $vm->id,
+            'action' => 'student.vm.start.success',
+            'description' => 'Student menjalankan lifecycle action VM.',
+        ]);
+
+        AuditLog::create([
+            'user_id' => $otherStudent->id,
+            'vm_id' => $otherVm->id,
+            'action' => 'student.vm.shutdown.success',
+            'description' => 'Other student hidden activity.',
+        ]);
+
+        CommandLog::create([
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $student->id,
+            'vm_id' => $vm->id,
+            'command' => 'whoami',
+            'status' => CommandLogStatus::Succeeded,
+            'executed_at' => now(),
+        ]);
+
+        $this->actingAs($student)
+            ->get(route('student.activity-history'))
+            ->assertOk()
+            ->assertSee('Activity History')
+            ->assertSee('Your recent lab activity inside the PAM protected workspace.')
+            ->assertSee('VM started')
+            ->assertSee('Command executed')
+            ->assertSee($vm->name)
+            ->assertDontSee('Recent Audit Events')
+            ->assertDontSee('Other student hidden activity')
+            ->assertDontSee($otherVm->name);
+
+        $this->actingAs($student)
+            ->get(route('dashboard.audit-logs'))
+            ->assertForbidden();
+    }
+
+    public function test_student_lab_guide_uses_student_layout_and_dashboard_templates_redirect(): void
+    {
+        $this->seed();
+
+        $student = User::where('email', 'siswa1@lab.test')->firstOrFail();
+
+        $this->actingAs($student)
+            ->get(route('student.lab-guide'))
+            ->assertOk()
+            ->assertSee('Student Lab Guide')
+            ->assertSee('Available Lab Templates')
+            ->assertSee('Linux Basic')
+            ->assertSee('Docker Lab')
+            ->assertSee('Student workspace')
+            ->assertDontSee('Zero Trust Dashboard');
+
+        $this->actingAs($student)
+            ->get(route('dashboard.templates'))
+            ->assertRedirect(route('student.lab-guide'));
     }
 
     public function test_dashboard_simulation_buttons_work(): void
     {
         $this->seed();
 
-        $this->post('/dashboard/simulate/docker-lab')
+        $admin = User::where('email', 'admin@lab.test')->firstOrFail();
+
+        $this->actingAs($admin)
+            ->post('/dashboard/simulate/docker-lab')
             ->assertRedirect()
             ->assertSessionHas('status');
 
         $vm = Vm::firstOrFail();
 
-        $this->post("/dashboard/simulate/vms/{$vm->id}/resources")
+        $this->actingAs($admin)
+            ->post("/dashboard/simulate/vms/{$vm->id}/resources")
             ->assertRedirect()
             ->assertSessionHas('status');
 
@@ -58,7 +212,8 @@ class DashboardTest extends TestCase
         $this->assertSame(2560, $vm->memory_mb);
         $this->assertSame(25, $vm->disk_gb);
 
-        $this->delete("/dashboard/simulate/vms/{$vm->id}")
+        $this->actingAs($admin)
+            ->delete("/dashboard/simulate/vms/{$vm->id}")
             ->assertRedirect()
             ->assertSessionHas('status');
 

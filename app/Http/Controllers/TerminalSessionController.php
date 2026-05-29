@@ -58,7 +58,8 @@ class TerminalSessionController extends Controller
         }
 
         $sshPort = $this->targetPortFor($vm);
-        $sshReady = $sshReadiness->waitUntilReachable($sshHost, $sshPort);
+        $sshReady = $vm->hasResolvedSshCredentials()
+            || $sshReadiness->waitUntilReachable($sshHost, $sshPort);
 
         $terminalSession = TerminalSession::create([
             'session_token' => $this->makeSessionToken(),
@@ -292,7 +293,7 @@ class TerminalSessionController extends Controller
 
     private function targetHostFor(Vm $vm): ?string
     {
-        return $vm->sshHost()
+        return $vm->getResolvedSshHost()
             ?? ($vm->isProvisionedStudentVm()
                 ? null
                 : $this->configuredStaticTargetHost($vm));
@@ -365,6 +366,17 @@ class TerminalSessionController extends Controller
         }
 
         if (($terminalSession->metadata['ssh_ready'] ?? null) === false) {
+            if ($terminalSession->vm?->hasResolvedSshCredentials()) {
+                $terminalSession->forceFill([
+                    'metadata' => [
+                        ...($terminalSession->metadata ?? []),
+                        'ssh_ready' => true,
+                    ],
+                ])->save();
+
+                return null;
+            }
+
             return 'SSH is still starting inside this VM. Please wait a moment, then refresh this terminal session.';
         }
 
@@ -382,6 +394,17 @@ class TerminalSessionController extends Controller
         }
 
         if (($terminalSession->metadata['ssh_ready'] ?? false) === true) {
+            return true;
+        }
+
+        if ($terminalSession->vm?->hasResolvedSshCredentials()) {
+            $terminalSession->forceFill([
+                'metadata' => [
+                    ...($terminalSession->metadata ?? []),
+                    'ssh_ready' => true,
+                ],
+            ])->save();
+
             return true;
         }
 

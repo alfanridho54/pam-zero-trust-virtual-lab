@@ -30,9 +30,26 @@ class DashboardController extends Controller
         return $this->view('overview');
     }
 
-    public function templates(): View
+    public function templates(): RedirectResponse|View
     {
+        $user = $this->resolveDashboardUser(request());
+
+        if ($this->roleFor($user) === 'student') {
+            return redirect()->route('student.lab-guide');
+        }
+
         return $this->view('templates');
+    }
+
+    public function studentLabGuide(Request $request): View
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless($this->roleFor($user) === 'student', 403, 'Anda tidak memiliki akses ke lab guide siswa.');
+
+        return view('dashboard.student-lab-guide', [
+            'currentUser' => $user,
+            'vmTemplates' => VmTemplate::query()->enabled()->orderBy('name')->get(),
+        ]);
     }
 
     public function vms(): View
@@ -42,7 +59,41 @@ class DashboardController extends Controller
 
     public function auditLogs(): View
     {
+        $user = $this->resolveDashboardUser(request());
+        abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses ke audit logs.');
+
         return $this->view('audit-logs');
+    }
+
+    public function studentActivityHistory(Request $request): View
+    {
+        $user = $this->resolveDashboardUser($request);
+        abort_unless($this->roleFor($user) === 'student', 403, 'Anda tidak memiliki akses ke activity history siswa.');
+
+        $auditLogs = $this->studentAuditLogs($user, 50);
+        $commandLogs = $this->studentCommandLogs($user, 50);
+        $terminalSessions = TerminalSession::with('vm')
+            ->forUser($user)
+            ->latest('last_activity_at')
+            ->limit(50)
+            ->get();
+
+        $lastActivity = collect([
+            $auditLogs->max('created_at'),
+            $commandLogs->max('executed_at'),
+            $terminalSessions->max('last_activity_at'),
+        ])->filter()->max();
+
+        return view('dashboard.student-activity-history', [
+            'currentUser' => $user,
+            'summary' => [
+                'terminalSessions' => TerminalSession::forUser($user)->count(),
+                'commandsExecuted' => CommandLog::forUser($user)->count(),
+                'blockedCommands' => CommandLog::forUser($user)->blocked()->count(),
+                'lastActivity' => $lastActivity,
+            ],
+            'activityItems' => $this->studentActivityTimeline($auditLogs, $commandLogs),
+        ]);
     }
 
     public function socMonitoring(Request $request): View
@@ -600,7 +651,7 @@ class DashboardController extends Controller
             'vmTemplates' => $vmTemplates,
             'students' => $this->assignableStudents(),
             'sourceTemplateVms' => $this->sourceTemplateVms(),
-            'auditLogs' => AuditLog::with(['user', 'vm'])->latest()->limit(50)->get(),
+            'auditLogs' => $this->dashboardAuditLogs($user, $role),
             'canViewPamMonitoring' => $canViewPamMonitoring,
             'recentCommandLogs' => $canViewPamMonitoring ? $this->recentCommandLogs() : collect(),
             'activeTerminalSessions' => $canViewPamMonitoring ? $this->activeTerminalSessions() : collect(),
@@ -609,7 +660,7 @@ class DashboardController extends Controller
             'stats' => [
                 'templates' => VmTemplate::count(),
                 'vms' => $realVms->isNotEmpty() ? $realVms->count() : $visibleLocalVms->count(),
-                'auditLogs' => AuditLog::count(),
+                'auditLogs' => $role === 'student' && $user ? AuditLog::where('user_id', $user->id)->count() : AuditLog::count(),
                 'users' => User::count(),
             ],
         ];
@@ -631,7 +682,7 @@ class DashboardController extends Controller
 
     private function localVmsForUser(?User $user): Collection
     {
-        $query = Vm::withTrashed()
+        $query = Vm::query()
             ->with(['user', 'labTemplate', 'vmTemplate', 'practicalAccesses.user'])
             ->latest();
 
@@ -640,10 +691,138 @@ class DashboardController extends Controller
             'admin' => $query->get(),
             'guru' => $query->get(), // TODO: Batasi ke siswa bimbingan setelah relasi guru-siswa tersedia.
             'student' => $user
-                ? $query->where('user_id', $user->id)->get()->filter(fn (Vm $vm) => $vm->isStudentVisible())->values()
+                ? $query
+                    ->where(fn ($query) => $query
+                        ->where('user_id', $user->id)
+                        ->orWhereHas('practicalAccesses', fn ($accessQuery) => $accessQuery->where('user_id', $user->id)))
+                    ->get()
+                    ->filter(fn (Vm $vm) => $vm->isStudentVisible())
+                    ->values()
                 : collect(),
             default => collect(),
         };
+    }
+
+    private function dashboardAuditLogs(?User $user, string $role): Collection
+    {
+        if ($role === 'student') {
+            return $user ? $this->studentAuditLogs($user, 50) : collect();
+        }
+
+        return AuditLog::with(['user', 'vm'])->latest()->limit(50)->get();
+    }
+
+    private function studentAuditLogs(User $user, int $limit): Collection
+    {
+        return AuditLog::with(['vm'])
+            ->where('user_id', $user->id)
+            ->latest()
+            ->limit($limit)
+            ->get();
+    }
+
+    private function studentCommandLogs(User $user, int $limit): Collection
+    {
+        return CommandLog::with(['vm', 'terminalSession'])
+            ->forUser($user)
+            ->recent()
+            ->limit($limit)
+            ->get();
+    }
+
+    private function studentActivityTimeline(Collection $auditLogs, Collection $commandLogs): Collection
+    {
+        $auditItems = $auditLogs->map(fn (AuditLog $log): array => [
+            'type' => $log->action,
+            'title' => $this->readableActivityTitle($log->action),
+            'description' => $log->description,
+            'vm_name' => $log->vm?->name ?? 'Virtual lab workspace',
+            'occurred_at' => $log->created_at,
+            'status' => $this->activityStatusFor($log->action),
+            'icon' => $this->activityIconFor($log->action),
+        ]);
+
+        $commandItems = $commandLogs->map(fn (CommandLog $log): array => [
+            'type' => $log->isBlocked() ? 'terminal.command.blocked' : 'terminal.command.executed',
+            'title' => $log->isBlocked() ? 'Command blocked' : 'Command executed',
+            'description' => $log->isBlocked()
+                ? ($log->blocked_reason ?: 'Restricted command was blocked by policy.')
+                : 'Ran '.$this->shortCommand($log->command),
+            'vm_name' => $log->vm?->name ?? 'Virtual lab workspace',
+            'occurred_at' => $log->executed_at,
+            'status' => $log->status->value,
+            'icon' => $log->isBlocked() ? 'blocked' : 'command',
+        ]);
+
+        return $auditItems
+            ->merge($commandItems)
+            ->sortByDesc('occurred_at')
+            ->take(30)
+            ->values();
+    }
+
+    private function readableActivityTitle(string $action): string
+    {
+        return [
+            'terminal.session.created' => 'Terminal session started',
+            'terminal.session.closed' => 'Terminal session closed',
+            'terminal.session.denied' => 'Terminal session denied',
+            'terminal_session.revoked' => 'Terminal session ended',
+            'terminal.command.executed' => 'Command executed',
+            'terminal.command.blocked' => 'Command blocked',
+            'student.vm.created' => 'VM created',
+            'student.vm.start.success' => 'VM started',
+            'student.vm.start.failed' => 'VM start failed',
+            'student.vm.stop.success' => 'VM stopped',
+            'student.vm.stop.failed' => 'VM stop failed',
+            'student.vm.shutdown.success' => 'VM shut down',
+            'student.vm.shutdown.failed' => 'VM shutdown failed',
+            'student.vm.deleted.success' => 'VM deleted',
+            'student.vm.deleted.failed' => 'VM delete failed',
+            'student.vm.provisioned' => 'VM provisioned',
+            'student.vm.provision_failed' => 'VM provisioning failed',
+            'dashboard.vm.shared_access.granted' => 'Lab access granted',
+            'dashboard.vm.shared_access.revoked' => 'Lab access revoked',
+        ][$action] ?? Str::of($action)->replace(['.', '_'], ' ')->title()->toString();
+    }
+
+    private function activityStatusFor(string $action): string
+    {
+        if (str_contains($action, 'blocked') || str_contains($action, 'denied') || str_ends_with($action, '.failed')) {
+            return 'blocked';
+        }
+
+        if (str_contains($action, 'revoked') || str_contains($action, 'deleted')) {
+            return 'ended-student';
+        }
+
+        if (str_contains($action, 'shutdown') || str_contains($action, 'stop')) {
+            return 'stopped';
+        }
+
+        return 'succeeded';
+    }
+
+    private function activityIconFor(string $action): string
+    {
+        if (str_contains($action, 'command')) {
+            return str_contains($action, 'blocked') ? 'blocked' : 'command';
+        }
+
+        if (str_contains($action, 'session')) {
+            return 'terminal';
+        }
+
+        if (str_contains($action, 'shared_access')) {
+            return 'access';
+        }
+
+        return 'vm';
+    }
+
+    private function shortCommand(string $command): string
+    {
+        return Str::of($command)->squish()->limit(80)->toString();
     }
 
     private function formatRealVm(array $vm, ?User $user, Collection $localVms): array
@@ -659,7 +838,7 @@ class DashboardController extends Controller
         // Gabungkan inventory Proxmox dengan ownership lokal sebelum menentukan view/control permission.
         return [
             'vmid' => $vmid,
-            'name' => $vm['name'] ?? '-',
+            'name' => $localVm?->name ?? $vm['name'] ?? '-',
             'node' => $node,
             'status' => $vm['status'] ?? 'unknown',
             'cpu' => $this->formatCpu($vm['cpu'] ?? null),
@@ -870,7 +1049,10 @@ class DashboardController extends Controller
 
     private function findLocalVmInCollection(Collection $localVms, string $node, int $vmid): ?Vm
     {
-        return $localVms->first(fn (Vm $vm) => $vm->matchesProxmoxVm($node, $vmid));
+        return $localVms
+            ->filter(fn (Vm $vm) => ! $vm->trashed() && $vm->matchesProxmoxVm($node, $vmid))
+            ->sortByDesc(fn (Vm $vm) => $vm->created_at?->timestamp ?? 0)
+            ->first();
     }
 
     private function canAccessRealVm(?User $user, ?Vm $localVm): bool
@@ -888,7 +1070,9 @@ class DashboardController extends Controller
 
         if ($role === 'student') {
             // Siswa hanya bisa mengontrol VM Proxmox yang terikat ke record lokal miliknya.
-            return $user !== null && $localVm !== null && $localVm->user_id === $user->id;
+            return $user !== null
+                && $localVm !== null
+                && ($localVm->user_id === $user->id || $localVm->hasPracticalAccess($user));
         }
 
         return false;

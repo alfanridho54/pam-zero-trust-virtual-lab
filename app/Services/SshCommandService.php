@@ -48,6 +48,8 @@ class SshCommandService
                 : $credentials['password'];
 
             if (! $ssh->login($credentials['username'], $credential)) {
+                $this->logCommandFailure($terminalSession, $credentials, 'SSH authentication failed.');
+
                 return $this->failed($started, 'SSH authentication failed.');
             }
 
@@ -55,10 +57,26 @@ class SshCommandService
             $output = $ssh->exec($command);
 
             if ($output === false) {
+                $this->logCommandFailure(
+                    $terminalSession,
+                    $credentials,
+                    'SSH command execution failed.',
+                    exitCode: $ssh->getExitStatus(),
+                );
+
                 return $this->failed($started, 'SSH command execution failed.');
             }
 
             $exitCode = $ssh->getExitStatus();
+
+            if ($exitCode !== 0) {
+                $this->logCommandFailure(
+                    $terminalSession,
+                    $credentials,
+                    'SSH command exited with a non-zero status.',
+                    exitCode: $exitCode,
+                );
+            }
 
             return new SshCommandResult(
                 successful: $exitCode === 0,
@@ -66,7 +84,14 @@ class SshCommandService
                 durationMs: $this->durationMs($started),
                 output: $output,
             );
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
+            $this->logCommandFailure(
+                $terminalSession,
+                $credentials,
+                'SSH command execution failed.',
+                $exception,
+            );
+
             return $this->failed($started, 'SSH command execution failed.');
         }
     }
@@ -87,25 +112,24 @@ class SshCommandService
     protected function resolveCredentials(TerminalSession $terminalSession): array
     {
         $vm = $terminalSession->vm;
-        $metadata = is_array($vm?->metadata) ? $vm->metadata : [];
         $dynamicVm = (bool) $vm?->isProvisionedStudentVm();
         $username = $dynamicVm
-            ? $this->stringMetadata($metadata, 'ssh_username', $terminalSession->ssh_username ?: 'student')
+            ? ($vm?->getResolvedSshUsername() ?: ($terminalSession->ssh_username ?: 'student'))
             : ($terminalSession->ssh_username ?: 'student');
         $port = $dynamicVm
-            ? $this->integerMetadata($metadata, 'ssh_port', (int) ($terminalSession->ssh_port ?: 22))
+            ? (int) ($vm?->sshPort() ?: ($terminalSession->ssh_port ?: 22))
             : (int) ($terminalSession->ssh_port ?: 22);
-        $privateKey = $dynamicVm ? $this->stringMetadata($metadata, 'ssh_private_key') : $vm?->sshPrivateKey();
+        $privateKey = $vm?->sshPrivateKey();
         $password = null;
         $source = 'none';
 
         if ($privateKey !== null) {
             $source = $dynamicVm ? 'vm_metadata_private_key' : 'vm_private_key';
         } elseif ($dynamicVm) {
-            $password = $this->stringMetadata($metadata, 'ssh_password');
+            $password = $vm?->getResolvedSshPassword();
             $source = $password !== null ? 'vm_metadata_password' : 'none';
         } else {
-            $password = $vm?->sshPassword();
+            $password = $vm?->getResolvedSshPassword();
 
             if ($password !== null) {
                 $source = 'vm_metadata_password';
@@ -155,6 +179,25 @@ class SshCommandService
         $value = config($key);
 
         return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    private function logCommandFailure(
+        TerminalSession $terminalSession,
+        array $credentials,
+        string $message,
+        ?Throwable $exception = null,
+        ?int $exitCode = null,
+    ): void {
+        Log::warning('SSH command failed.', [
+            'host' => $terminalSession->ssh_host,
+            'username' => $credentials['username'] ?? $terminalSession->ssh_username,
+            'port' => $credentials['port'] ?? $terminalSession->ssh_port,
+            'session_id' => $terminalSession->id,
+            'vm_id' => $terminalSession->vm_id,
+            'exception_class' => $exception ? $exception::class : null,
+            'exception_message' => $exception?->getMessage() ?: $message,
+            'exit_code' => $exitCode,
+        ]);
     }
 
     private function failed(int $started, string $message): SshCommandResult

@@ -11,6 +11,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 use Throwable;
@@ -35,6 +36,7 @@ class StudentVmController extends Controller
             ->values();
 
         $vms->each(fn (Vm $vm) => $this->syncProvisioningStatus($user, $vm));
+        $this->syncSharedVmDisplayStatus($user, $vms);
 
         return view('student.vms.index', [
             'currentUser' => $user,
@@ -314,6 +316,39 @@ class StudentVmController extends Controller
             'description' => $description,
             'metadata' => ['source' => 'student-self-service', ...$this->redactSensitiveMetadata($metadata)],
         ]);
+    }
+
+    private function syncSharedVmDisplayStatus(User $user, Collection $vms): void
+    {
+        $sharedVms = $vms
+            ->filter(fn (Vm $vm) => $vm->user_id !== $user->id && $vm->hasPracticalAccess($user))
+            ->values();
+
+        if ($sharedVms->isEmpty()) {
+            return;
+        }
+
+        $response = $this->proxmox->listVms();
+
+        if (! ($response['success'] ?? false)) {
+            $sharedVms->each(fn (Vm $vm) => $vm->forceFill(['status' => 'unknown']));
+
+            return;
+        }
+
+        $realVms = collect($response['data'] ?? [])->filter(fn ($vm) => is_array($vm));
+
+        $sharedVms->each(function (Vm $vm) use ($realVms): void {
+            $vmid = $vm->proxmoxVmid();
+            $realVm = $vmid === null
+                ? null
+                : $realVms->first(fn (array $realVm) => (int) ($realVm['vmid'] ?? 0) === $vmid
+                    && (string) ($realVm['node'] ?? '') === $vm->node);
+
+            $vm->forceFill([
+                'status' => is_array($realVm) ? (string) ($realVm['status'] ?? 'unknown') : 'unknown',
+            ]);
+        });
     }
 
     private function detectAndStoreSshMetadata(Vm $vm, ?VmTemplate $template = null): bool

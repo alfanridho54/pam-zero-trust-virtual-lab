@@ -253,6 +253,23 @@ class TerminalCommandExecutionTest extends TestCase
                     && ! str_contains($encoded, 'wrong-config-password');
             }))
             ->once();
+
+        Log::shouldHaveReceived('warning')
+            ->with('SSH command failed.', \Mockery::on(function (array $context) use ($terminalSession): bool {
+                $encoded = json_encode($context);
+
+                return ($context['host'] ?? null) === '127.0.0.1'
+                    && ($context['username'] ?? null) === 'metadata-user'
+                    && ($context['port'] ?? null) === 1
+                    && ($context['session_id'] ?? null) === $terminalSession->id
+                    && ($context['vm_id'] ?? null) === $terminalSession->vm_id
+                    && array_key_exists('exception_class', $context)
+                    && array_key_exists('exception_message', $context)
+                    && array_key_exists('exit_code', $context)
+                    && ! str_contains($encoded, 'metadata-secret')
+                    && ! str_contains($encoded, 'wrong-config-password');
+            }))
+            ->once();
     }
 
     public function test_terminal_test_ssh_command_prints_safe_fields_and_runs_whoami(): void

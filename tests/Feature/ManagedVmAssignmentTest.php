@@ -559,6 +559,115 @@ class ManagedVmAssignmentTest extends TestCase
             ->assertDontSee($vm->name);
     }
 
+    public function test_deleted_vm_with_same_proxmox_vmid_does_not_override_active_shared_vm_name(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $student = User::factory()->create(['role' => 'student']);
+        $deletedVm = $this->vm([
+            'user_id' => null,
+            'name' => 'Deleted Historical Shared VM',
+            'proxmox_id' => 'deleted-3301',
+            'node' => 'pve-test',
+            'metadata' => ['shared_practical' => true, 'vmid' => 3301],
+            'created_at' => now()->subDay(),
+            'updated_at' => now()->subDay(),
+        ]);
+        $deletedVm->delete();
+
+        $activeVm = $this->sharedVmFor($student, $admin, [
+            'name' => 'Current Shared Practice VM',
+            'proxmox_id' => 'active-3301',
+            'node' => 'pve-test',
+            'status' => 'running',
+            'metadata' => ['shared_practical' => true, 'vmid' => 3301],
+        ]);
+
+        $this->fakeProxmoxInventory([
+            ['vmid' => 3301, 'node' => 'pve-test', 'name' => 'Proxmox VM 3301', 'status' => 'stopped'],
+        ]);
+
+        $this->actingAs($student)
+            ->get(route('dashboard'))
+            ->assertOk()
+            ->assertSee($activeVm->name)
+            ->assertDontSee($deletedVm->name);
+    }
+
+    public function test_shared_vm_status_shown_to_student_matches_proxmox_status(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $student = User::factory()->create(['role' => 'student']);
+        $vm = $this->sharedVmFor($student, $admin, [
+            'name' => 'Shared Status VM',
+            'proxmox_id' => '3302',
+            'node' => 'pve-test',
+            'status' => 'running',
+            'metadata' => ['shared_practical' => true, 'vmid' => 3302],
+        ]);
+
+        $this->fakeProxmoxInventory([
+            ['vmid' => 3302, 'node' => 'pve-test', 'name' => 'Shared Status VM', 'status' => 'stopped'],
+        ]);
+
+        $this->actingAs($student)
+            ->get(route('dashboard'))
+            ->assertOk()
+            ->assertSee($vm->name)
+            ->assertSee('Your assigned VM is stopped');
+    }
+
+    public function test_stopped_shared_vm_appears_stopped_on_student_vm_dashboard(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $student = User::factory()->create(['role' => 'student']);
+        $vm = $this->sharedVmFor($student, $admin, [
+            'name' => 'Stopped Shared VM',
+            'proxmox_id' => '3303',
+            'node' => 'pve-test',
+            'status' => 'running',
+            'metadata' => ['shared_practical' => true, 'vmid' => 3303],
+        ]);
+
+        $this->fakeProxmoxInventory([
+            ['vmid' => 3303, 'node' => 'pve-test', 'name' => 'Stopped Shared VM', 'status' => 'stopped'],
+        ]);
+
+        $this->actingAs($student)
+            ->get(route('student.vms.index'))
+            ->assertOk()
+            ->assertSee($vm->name)
+            ->assertSee('stopped');
+    }
+
+    public function test_shared_vm_status_is_unknown_when_proxmox_status_is_unavailable(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $student = User::factory()->create(['role' => 'student']);
+        $vm = $this->sharedVmFor($student, $admin, [
+            'name' => 'Unavailable Shared VM',
+            'proxmox_id' => '3304',
+            'node' => 'pve-test',
+            'status' => 'running',
+            'metadata' => ['shared_practical' => true, 'vmid' => 3304],
+        ]);
+
+        $this->app->instance(ProxmoxService::class, new class extends ProxmoxService
+        {
+            public function __construct() {}
+
+            public function listVms(): array
+            {
+                return ['success' => false, 'message' => 'Proxmox unavailable', 'data' => []];
+            }
+        });
+
+        $this->actingAs($student)
+            ->get(route('student.vms.index'))
+            ->assertOk()
+            ->assertSee($vm->name)
+            ->assertSee('unknown');
+    }
+
     public function test_student_with_shared_access_can_open_terminal_and_logs_record_authenticated_student(): void
     {
         $admin = User::factory()->create(['role' => 'admin']);
@@ -815,6 +924,19 @@ class ManagedVmAssignmentTest extends TestCase
             public function waitUntilReachable(string $host, int $port, ?int $attempts = null, ?int $delayMilliseconds = null, ?float $timeoutSeconds = null): bool
             {
                 return true;
+            }
+        });
+    }
+
+    private function fakeProxmoxInventory(array $vms): void
+    {
+        $this->app->instance(ProxmoxService::class, new class($vms) extends ProxmoxService
+        {
+            public function __construct(private readonly array $vms) {}
+
+            public function listVms(): array
+            {
+                return ['success' => true, 'message' => 'OK', 'data' => $this->vms];
             }
         });
     }
