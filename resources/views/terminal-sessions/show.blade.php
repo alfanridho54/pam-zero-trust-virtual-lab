@@ -45,7 +45,7 @@
                 <p class="mt-1 text-sm text-slate-500">Interactive monitored terminal session for {{ $terminalSession->vm?->name ?? 'VM' }}.</p>
             </div>
             <div class="flex flex-wrap gap-2">
-                <a href="{{ route('dashboard.vms') }}" class="inline-flex min-h-10 items-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                <a href="{{ route('student.vms.index') }}" class="inline-flex min-h-10 items-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
                     Back to VMs
                 </a>
                 <form method="POST" action="{{ route('terminal-sessions.destroy', $terminalSession) }}">

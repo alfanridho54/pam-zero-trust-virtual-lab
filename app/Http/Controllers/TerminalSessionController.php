@@ -12,6 +12,7 @@ use App\Models\Vm;
 use App\Services\ProxmoxService;
 use App\Services\SshCommandService;
 use App\Services\SshReadinessService;
+use App\Services\VmSshHostRefreshService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
@@ -30,7 +31,7 @@ class TerminalSessionController extends Controller
      * Membuka lifecycle sesi PAM untuk VM yang sudah lolos policy ownership.
      * Sesi dibuat sebagai pending agar akses SSH baru aktif saat command pertama dijalankan.
      */
-    public function store(Request $request, Vm $vm, ProxmoxService $proxmox, SshReadinessService $sshReadiness): RedirectResponse
+    public function store(Request $request, Vm $vm, ProxmoxService $proxmox, SshReadinessService $sshReadiness, VmSshHostRefreshService $sshHostRefresh): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
         abort_unless($user, 403, 'Anda tidak memiliki akses ke VM ini.');
@@ -47,7 +48,7 @@ class TerminalSessionController extends Controller
             return back()->with('error', 'Start this VM before opening terminal access.');
         }
 
-        $sshHost = $this->targetHostFor($vm);
+        $sshHost = $sshHostRefresh->refreshVm($vm) ?? $this->targetHostFor($vm);
 
         if ($sshHost === null) {
             $sshHost = $this->detectAndStoreGuestIp($vm, $proxmox);
@@ -97,7 +98,7 @@ class TerminalSessionController extends Controller
             ->with('status', $message);
     }
 
-    public function show(Request $request, TerminalSession $terminalSession, SshReadinessService $sshReadiness): View
+    public function show(Request $request, TerminalSession $terminalSession, SshReadinessService $sshReadiness, VmSshHostRefreshService $sshHostRefresh): View
     {
         $user = $this->resolveDashboardUser($request);
         abort_unless($user, 403, 'Anda tidak memiliki akses ke VM ini.');
@@ -107,6 +108,7 @@ class TerminalSessionController extends Controller
         $terminalSession->load(['user', 'vm']);
         // Pastikan sesi yang melewati TTL tidak lagi mendapat tiket terminal baru.
         $terminalSession->expireIfPastDue();
+        $sshHostRefresh->refreshSession($terminalSession);
         $this->refreshSshReadiness($terminalSession, $sshReadiness);
         $commandLogs = $terminalSession->commandLogs()
             ->recent()
@@ -124,7 +126,7 @@ class TerminalSessionController extends Controller
         ]);
     }
 
-    public function executeCommand(Request $request, TerminalSession $terminalSession, SshCommandService $sshCommandService, SshReadinessService $sshReadiness): RedirectResponse
+    public function executeCommand(Request $request, TerminalSession $terminalSession, SshCommandService $sshCommandService, SshReadinessService $sshReadiness, VmSshHostRefreshService $sshHostRefresh): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
         abort_unless($user, 403, 'Anda tidak memiliki akses ke VM ini.');
@@ -135,6 +137,7 @@ class TerminalSessionController extends Controller
 
         // Cegah sesi revoked/expired tetap mengeksekusi command melalui request lama.
         $terminalSession->expireIfPastDue();
+        $sshHostRefresh->refreshSession($terminalSession);
         $this->refreshSshReadiness($terminalSession, $sshReadiness);
 
         $command = trim((string) $request->input('command', self::DEFAULT_TEST_COMMAND));
@@ -217,7 +220,7 @@ class TerminalSessionController extends Controller
         ]);
 
         return redirect()
-            ->route('dashboard.vms')
+            ->route($this->isStudentRole($user) ? 'student.vms.index' : 'dashboard.vms')
             ->with('status', 'Terminal session ditutup.');
     }
 
@@ -445,6 +448,11 @@ class TerminalSessionController extends Controller
                 'role' => 'student',
             ],
         );
+    }
+
+    private function isStudentRole(User $user): bool
+    {
+        return in_array($user->role, ['student', 'mahasiswa', 'siswa'], true);
     }
 
     private function audit(User $user, ?Vm $vm, string $action, string $description, array $metadata = []): void

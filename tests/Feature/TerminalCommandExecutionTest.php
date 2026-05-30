@@ -8,8 +8,10 @@ use App\Models\AuditLog;
 use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
+use App\Services\ProxmoxService;
 use App\Services\SshCommandResult;
 use App\Services\SshCommandService;
+use App\Services\SshReadinessService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
@@ -54,6 +56,200 @@ class TerminalCommandExecutionTest extends TestCase
             'status' => CommandLogStatus::Succeeded->value,
             'exit_code' => 0,
         ]);
+    }
+
+    public function test_stale_ip_gets_refreshed_before_terminal_command(): void
+    {
+        Log::spy();
+
+        $user = $this->student();
+        $terminalSession = $this->terminalSessionFor($user, [
+            'provisioning' => 'student-self-service',
+            'vmid' => 103,
+            'ssh_host' => '172.16.1.30',
+            'ip_address' => '172.16.1.30',
+            'ssh_password' => 'metadata-secret',
+        ], [
+            'vmid' => 103,
+            'ssh_host' => '172.16.1.30',
+        ]);
+
+        $this->app->instance(ProxmoxService::class, new class extends ProxmoxService
+        {
+            public function __construct()
+            {
+            }
+
+            public function detectGuestIpv4(string $node, int $vmid): ?string
+            {
+                return $node === 'pve-mock' && $vmid === 103 ? '172.16.1.29' : null;
+            }
+        });
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: $terminalSession->ssh_host === '172.16.1.29',
+                    exitCode: $terminalSession->ssh_host === '172.16.1.29' ? 0 : 1,
+                    durationMs: 15,
+                    output: $terminalSession->ssh_host,
+                    error: $terminalSession->ssh_host === '172.16.1.29' ? '' : 'SSH used stale host '.$terminalSession->ssh_host,
+                );
+            }
+        });
+
+        $this->actingAs($user)
+            ->post(route('terminal-sessions.commands.store', $terminalSession), [
+                'command' => 'hostname',
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $terminalSession->refresh();
+        $terminalSession->vm->refresh();
+
+        $this->assertSame('172.16.1.29', $terminalSession->ssh_host);
+        $this->assertSame('172.16.1.29', $terminalSession->vm->metadata['ssh_host']);
+        $this->assertSame('172.16.1.29', $terminalSession->vm->metadata['ip_address']);
+
+        Log::shouldHaveReceived('info')
+            ->with('VM SSH host refreshed from Proxmox guest agent.', \Mockery::on(fn (array $context): bool => $context === [
+                'vm_id' => $terminalSession->vm_id,
+                'proxmox_vmid' => 103,
+                'old_ip' => '172.16.1.30',
+                'new_ip' => '172.16.1.29',
+            ]))
+            ->once();
+    }
+
+    public function test_guest_agent_unavailable_falls_back_to_existing_metadata_before_command(): void
+    {
+        Log::spy();
+
+        $user = $this->student();
+        $terminalSession = $this->terminalSessionFor($user, [
+            'provisioning' => 'student-self-service',
+            'vmid' => 104,
+            'ssh_host' => '172.16.1.30',
+            'ip_address' => '172.16.1.30',
+            'ssh_password' => 'metadata-secret',
+        ], [
+            'vmid' => 104,
+            'ssh_host' => '172.16.1.30',
+        ]);
+
+        $this->app->instance(ProxmoxService::class, new class extends ProxmoxService
+        {
+            public function __construct()
+            {
+            }
+
+            public function detectGuestIpv4(string $node, int $vmid): ?string
+            {
+                return null;
+            }
+        });
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: $terminalSession->ssh_host === '172.16.1.30',
+                    exitCode: $terminalSession->ssh_host === '172.16.1.30' ? 0 : 1,
+                    durationMs: 12,
+                    output: $terminalSession->ssh_host,
+                );
+            }
+        });
+
+        $this->actingAs($user)
+            ->post(route('terminal-sessions.commands.store', $terminalSession), [
+                'command' => 'hostname',
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $terminalSession->refresh();
+        $terminalSession->vm->refresh();
+
+        $this->assertSame('172.16.1.30', $terminalSession->ssh_host);
+        $this->assertSame('172.16.1.30', $terminalSession->vm->metadata['ssh_host']);
+        $this->assertSame('172.16.1.30', $terminalSession->vm->metadata['ip_address']);
+
+        Log::shouldHaveReceived('warning')
+            ->with('VM SSH host refresh unavailable; falling back to existing metadata.', \Mockery::on(fn (array $context): bool => ($context['vm_id'] ?? null) === $terminalSession->vm_id
+                && ($context['proxmox_vmid'] ?? null) === 104
+                && ($context['existing_ssh_host'] ?? null) === '172.16.1.30'))
+            ->once();
+    }
+
+    public function test_self_service_vm_terminal_creation_uses_refreshed_ip(): void
+    {
+        config([
+            'services.terminal.ssh_ready_attempts' => 1,
+            'services.terminal.ssh_ready_delay_ms' => 0,
+        ]);
+
+        $user = $this->student();
+        $vm = Vm::create([
+            'user_id' => $user->id,
+            'name' => 'self-service-vm',
+            'proxmox_id' => '105',
+            'node' => 'pve-mock',
+            'status' => 'running',
+            'cpu_cores' => 1,
+            'memory_mb' => 1024,
+            'disk_gb' => 10,
+            'metadata' => [
+                'provisioning' => 'student-self-service',
+                'vmid' => 105,
+                'ssh_host' => '172.16.1.30',
+                'ip_address' => '172.16.1.30',
+                'ssh_username' => 'student',
+                'ssh_password' => 'metadata-secret',
+            ],
+        ]);
+
+        $this->app->instance(ProxmoxService::class, new class extends ProxmoxService
+        {
+            public function __construct()
+            {
+            }
+
+            public function detectGuestIpv4(string $node, int $vmid): ?string
+            {
+                return $node === 'pve-mock' && $vmid === 105 ? '172.16.1.29' : null;
+            }
+        });
+
+        $this->app->instance(SshReadinessService::class, new class extends SshReadinessService
+        {
+            public function waitUntilReachable(string $host, int $port, ?int $attempts = null, ?int $delayMilliseconds = null, ?float $timeoutSeconds = null): bool
+            {
+                return $host === '172.16.1.29';
+            }
+        });
+
+        $this->actingAs($user)
+            ->post(route('terminal-sessions.store', $vm))
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $this->assertDatabaseHas('terminal_sessions', [
+            'user_id' => $user->id,
+            'vm_id' => $vm->id,
+            'vmid' => 105,
+            'ssh_host' => '172.16.1.29',
+            'status' => TerminalSessionStatus::Pending->value,
+        ]);
+
+        $vm->refresh();
+
+        $this->assertSame('172.16.1.29', $vm->metadata['ssh_host']);
+        $this->assertSame('172.16.1.29', $vm->metadata['ip_address']);
     }
 
     public function test_student_with_shared_practical_access_can_execute_command(): void
@@ -536,6 +732,33 @@ class TerminalCommandExecutionTest extends TestCase
             ->get(route('terminal-sessions.show', $warningSession))
             ->assertOk()
             ->assertSee('Session expires in less than 5 minutes.');
+    }
+
+    public function test_student_closing_terminal_session_returns_to_student_vm_page(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->terminalSessionFor($user);
+
+        $this->actingAs($user)
+            ->delete(route('terminal-sessions.destroy', $terminalSession))
+            ->assertRedirect(route('student.vms.index'))
+            ->assertSessionHas('status');
+
+        $this->assertTrue($terminalSession->refresh()->isEnded());
+    }
+
+    public function test_admin_closing_terminal_session_returns_to_admin_vm_page(): void
+    {
+        $admin = $this->admin();
+        $student = $this->student();
+        $terminalSession = $this->terminalSessionFor($student);
+
+        $this->actingAs($admin)
+            ->delete(route('terminal-sessions.destroy', $terminalSession))
+            ->assertRedirect(route('dashboard.vms'))
+            ->assertSessionHas('status');
+
+        $this->assertTrue($terminalSession->refresh()->isEnded());
     }
 
     private function student(): User

@@ -52,8 +52,14 @@ class DashboardController extends Controller
         ]);
     }
 
-    public function vms(): View
+    public function vms(): RedirectResponse|View
     {
+        $user = $this->resolveDashboardUser(request());
+
+        if ($this->roleFor($user) === 'student') {
+            return redirect()->route('student.vms.index');
+        }
+
         return $this->view('vms');
     }
 
@@ -553,6 +559,21 @@ class DashboardController extends Controller
     public function proxmoxVmAction(Request $request, string $node, string $vmid, string $action): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
+        $role = $this->roleFor($user);
+
+        if (! in_array($role, ['admin', 'guru'], true)) {
+            $this->audit($user?->id, null, 'dashboard.proxmox.vm.denied', 'Action VM dashboard ditolak untuk role non-admin.', [
+                'node' => $node,
+                'vmid' => $vmid,
+                'action' => $action,
+                'role' => $role,
+            ]);
+
+            abort_if($request->expectsJson(), 403, 'Anda tidak memiliki akses untuk mengontrol VM dari dashboard admin.');
+
+            return back()->with('error', 'Student tidak bisa mengontrol VM dari dashboard admin.');
+        }
+
         $validated = Validator::make([
             'node' => $node,
             'vmid' => $vmid,

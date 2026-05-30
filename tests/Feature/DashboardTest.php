@@ -189,6 +189,31 @@ class DashboardTest extends TestCase
             ->assertRedirect(route('student.lab-guide'));
     }
 
+    public function test_student_cannot_access_admin_vm_management_or_admin_power_actions(): void
+    {
+        $this->seed();
+
+        $student = User::where('email', 'siswa1@lab.test')->firstOrFail();
+        $vm = $this->createVmForOwner($student, 'Student Owned VM');
+        $vm->update([
+            'node' => 'prox-drc01',
+            'metadata' => [
+                ...($vm->metadata ?? []),
+                'vmid' => 2301,
+            ],
+        ]);
+
+        $this->actingAs($student)
+            ->get(route('dashboard.vms'))
+            ->assertRedirect(route('student.vms.index'));
+
+        $this->actingAs($student)
+            ->from(route('student.vms.index'))
+            ->post(route('dashboard.proxmox.vms.action', [$vm->node, 2301, 'shutdown']))
+            ->assertRedirect(route('student.vms.index'))
+            ->assertSessionHas('error');
+    }
+
     public function test_dashboard_simulation_buttons_work(): void
     {
         $this->seed();

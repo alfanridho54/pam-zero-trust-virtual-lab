@@ -17,6 +17,7 @@ class TerminalWebSocketCommandService
 
     public function __construct(
         private readonly SshCommandService $sshCommandService,
+        private readonly VmSshHostRefreshService $sshHostRefresh,
     ) {
     }
 
@@ -32,6 +33,7 @@ class TerminalWebSocketCommandService
         $terminalSession->loadMissing('vm');
         // Refresh status sebelum eksekusi agar revoke/expire dari dashboard langsung berlaku di WebSocket.
         $terminalSession->expireIfPastDue();
+        $this->sshHostRefresh->refreshSession($terminalSession);
 
         if (mb_strlen($command) > self::MAX_COMMAND_LENGTH) {
             return $this->blocked($terminalSession, $user, $command, 'Command terlalu panjang untuk interactive terminal.');

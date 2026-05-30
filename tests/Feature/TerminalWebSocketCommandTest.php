@@ -7,6 +7,7 @@ use App\Enums\TerminalSessionStatus;
 use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
+use App\Services\ProxmoxService;
 use App\Services\SshCommandResult;
 use App\Services\SshCommandService;
 use App\Services\TerminalWebSocketCommandService;
@@ -88,6 +89,57 @@ class TerminalWebSocketCommandTest extends TestCase
             'command' => 'whoami',
             'status' => CommandLogStatus::Succeeded->value,
         ]);
+    }
+
+    public function test_shared_practical_websocket_command_uses_refreshed_ip(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, [
+            'status' => TerminalSessionStatus::Active,
+            'vmid' => 2601,
+            'ssh_host' => '172.16.1.30',
+        ], vmMetadata: [
+            'vmid' => 2601,
+            'ssh_host' => '172.16.1.30',
+            'ip_address' => '172.16.1.30',
+        ]);
+
+        $this->app->instance(ProxmoxService::class, new class extends ProxmoxService
+        {
+            public function __construct()
+            {
+            }
+
+            public function detectGuestIpv4(string $node, int $vmid): ?string
+            {
+                return $node === 'pve-mock' && $vmid === 2601 ? '172.16.1.29' : null;
+            }
+        });
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: $terminalSession->ssh_host === '172.16.1.29',
+                    exitCode: $terminalSession->ssh_host === '172.16.1.29' ? 0 : 1,
+                    durationMs: 12,
+                    output: $terminalSession->ssh_host,
+                    error: $terminalSession->ssh_host === '172.16.1.29' ? '' : 'stale host',
+                );
+            }
+        });
+
+        $result = $this->app->make(TerminalWebSocketCommandService::class)
+            ->run($terminalSession, $user, 'whoami');
+
+        $terminalSession->refresh();
+        $terminalSession->vm->refresh();
+
+        $this->assertSame('output', $result->type);
+        $this->assertSame('172.16.1.29', $terminalSession->ssh_host);
+        $this->assertSame('172.16.1.29', $terminalSession->vm->metadata['ssh_host']);
+        $this->assertSame('172.16.1.29', $terminalSession->vm->metadata['ip_address']);
     }
 
     public function test_websocket_command_requires_shared_practical_access(): void
@@ -301,7 +353,7 @@ class TerminalWebSocketCommandTest extends TestCase
         ]);
     }
 
-    private function sharedPracticalTerminalSessionFor(User $user, array $sessionAttributes = [], bool $grantAccess = true): TerminalSession
+    private function sharedPracticalTerminalSessionFor(User $user, array $sessionAttributes = [], bool $grantAccess = true, array $vmMetadata = []): TerminalSession
     {
         $vm = Vm::create([
             'user_id' => null,
@@ -317,6 +369,7 @@ class TerminalWebSocketCommandTest extends TestCase
                 'ssh_host' => '127.0.0.1',
                 'ssh_port' => 22,
                 'ssh_username' => 'student',
+                ...$vmMetadata,
             ],
         ]);
 
