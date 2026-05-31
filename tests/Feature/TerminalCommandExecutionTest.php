@@ -514,7 +514,7 @@ class TerminalCommandExecutionTest extends TestCase
             ->assertExitCode(0);
     }
 
-    public function test_blocked_terminal_command_is_logged_without_execution(): void
+    public function test_extreme_destructive_terminal_command_is_logged_without_execution(): void
     {
         $user = $this->student();
         $terminalSession = $this->terminalSessionFor($user, [], [
@@ -531,7 +531,7 @@ class TerminalCommandExecutionTest extends TestCase
 
         $this->actingAs($user)
             ->post(route('terminal-sessions.commands.store', $terminalSession), [
-                'command' => 'reboot',
+                'command' => 'mkfs.ext4 /dev/sda',
             ])
             ->assertRedirect()
             ->assertSessionHas('error');
@@ -539,7 +539,7 @@ class TerminalCommandExecutionTest extends TestCase
         $this->assertDatabaseHas('command_logs', [
             'terminal_session_id' => $terminalSession->id,
             'user_id' => $user->id,
-            'command' => 'reboot',
+            'command' => 'mkfs.ext4 /dev/sda',
             'status' => CommandLogStatus::Blocked->value,
             'blocked_reason' => 'Command diblokir oleh policy terminal.',
         ]);
@@ -547,6 +547,104 @@ class TerminalCommandExecutionTest extends TestCase
         $terminalSession->refresh();
 
         $this->assertTrue($terminalSession->last_activity_at->greaterThan(now()->subMinute()));
+    }
+
+    public function test_shared_practical_vm_blocks_reboot_and_shutdown_commands(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                throw new \RuntimeException('SSH should not be called for blocked shared practical commands.');
+            }
+        });
+
+        foreach (['reboot', 'shutdown now'] as $command) {
+            $this->actingAs($user)
+                ->post(route('terminal-sessions.commands.store', $terminalSession), [
+                    'command' => $command,
+                ])
+                ->assertRedirect()
+                ->assertSessionHas('error');
+
+            $this->assertDatabaseHas('command_logs', [
+                'terminal_session_id' => $terminalSession->id,
+                'user_id' => $user->id,
+                'command' => $command,
+                'status' => CommandLogStatus::Blocked->value,
+                'blocked_reason' => 'Command diblokir oleh policy terminal.',
+            ]);
+        }
+    }
+
+    public function test_self_service_vm_allows_reboot_and_shutdown_commands_and_logs_them(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->terminalSessionFor($user);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: true,
+                    exitCode: 0,
+                    durationMs: 20,
+                    output: "accepted: {$command}\n",
+                );
+            }
+        });
+
+        foreach (['reboot', 'shutdown now'] as $command) {
+            $this->actingAs($user)
+                ->post(route('terminal-sessions.commands.store', $terminalSession), [
+                    'command' => $command,
+                ])
+                ->assertRedirect()
+                ->assertSessionHas('status');
+
+            $this->assertDatabaseHas('command_logs', [
+                'terminal_session_id' => $terminalSession->id,
+                'user_id' => $user->id,
+                'command' => $command,
+                'status' => CommandLogStatus::Succeeded->value,
+                'exit_code' => 0,
+            ]);
+        }
+    }
+
+    public function test_self_service_vm_still_blocks_extreme_destructive_commands(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->terminalSessionFor($user);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                throw new \RuntimeException('SSH should not be called for extreme destructive commands.');
+            }
+        });
+
+        foreach (['rm -rf /', 'chmod -R 777 /'] as $command) {
+            $this->actingAs($user)
+                ->post(route('terminal-sessions.commands.store', $terminalSession), [
+                    'command' => $command,
+                ])
+                ->assertRedirect()
+                ->assertSessionHas('error');
+
+            $this->assertDatabaseHas('command_logs', [
+                'terminal_session_id' => $terminalSession->id,
+                'user_id' => $user->id,
+                'command' => $command,
+                'status' => CommandLogStatus::Blocked->value,
+                'blocked_reason' => 'Command diblokir oleh policy terminal.',
+            ]);
+        }
     }
 
     public function test_protected_vm_terminal_command_is_blocked(): void

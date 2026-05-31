@@ -135,6 +135,13 @@ class Vm extends Model
         return $this->metadataFlag('shared_practical');
     }
 
+    public function isSelfServiceOwnedBy(User $user): bool
+    {
+        return in_array($user->role, ['student', 'mahasiswa', 'siswa'], true)
+            && $this->user_id === $user->id
+            && ! $this->isSharedPractical();
+    }
+
     public function hasPracticalAccess(User|int $user): bool
     {
         $userId = $user instanceof User ? $user->id : $user;

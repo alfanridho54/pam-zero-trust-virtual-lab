@@ -8,6 +8,7 @@ use App\Models\CommandLog;
 use App\Models\TerminalSession;
 use App\Models\User;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class TerminalWebSocketCommandService
@@ -23,7 +24,17 @@ class TerminalWebSocketCommandService
 
     public function run(TerminalSession $terminalSession, User $user, string $command): TerminalWebSocketCommandResult
     {
+        $originalCommand = $command;
         $command = trim($command);
+
+        Log::debug('PAM websocket command received.', [
+            'session_id' => $terminalSession->id,
+            'vm_id' => $terminalSession->vm_id,
+            'user_id' => $user->id,
+            'original_command' => $originalCommand,
+            'normalized_command' => $command,
+            'transport' => 'websocket',
+        ]);
 
         if ($command === '') {
             return new TerminalWebSocketCommandResult('ignored', '', null, '');
@@ -77,8 +88,26 @@ class TerminalWebSocketCommandService
             $result->successful
                 ? $commandLog->markSucceeded($result->exitCode, $result->durationMs, $outputExcerpt)
                 : $commandLog->markFailed($result->exitCode, $result->durationMs, $outputExcerpt);
-        } catch (Throwable) {
+            Log::debug('PAM websocket SSH result received.', [
+                'session_id' => $terminalSession->id,
+                'vm_id' => $terminalSession->vm_id,
+                'user_id' => $user->id,
+                'normalized_command' => $command,
+                'status' => $result->successful ? 'succeeded' : 'failed',
+                'exit_code' => $result->exitCode,
+                'ssh_output' => $outputExcerpt,
+                'ssh_error' => $result->error,
+            ]);
+        } catch (Throwable $exception) {
             $outputExcerpt = 'SSH command execution failed.';
+            Log::debug('PAM websocket command exception.', [
+                'session_id' => $terminalSession->id,
+                'vm_id' => $terminalSession->vm_id,
+                'user_id' => $user->id,
+                'normalized_command' => $command,
+                'exception_class' => $exception::class,
+                'exception_message' => $exception->getMessage(),
+            ]);
             $commandLog->markFailed(null, null, $outputExcerpt);
         }
 

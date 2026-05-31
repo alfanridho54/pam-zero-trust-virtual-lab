@@ -35,16 +35,42 @@ class CommandLogPolicy
             return Response::deny('Command diblokir untuk VM system atau protected.');
         }
 
-        $blockedReason = $this->blockedReason($command);
+        $policy = $this->commandPolicy($terminalSession, $user);
+        $blockedReason = CommandLog::blockedReasonFor($command, $policy);
+
+        Log::debug('PAM command policy evaluated.', [
+            'session_id' => $terminalSession->id,
+            'vm_id' => $terminalSession->vm_id,
+            'user_id' => $user->id,
+            'original_command' => $command,
+            'normalized_command' => trim($command),
+            'selected_policy' => $policy,
+            'result' => $blockedReason ? 'blocked' : 'allowed',
+            'blocked_reason' => $blockedReason,
+            'shared_practical' => (bool) ($terminalSession->vm?->isSharedPractical() ?? false),
+            'self_service_owned' => (bool) ($terminalSession->vm?->isSelfServiceOwnedBy($user) ?? false),
+        ]);
 
         return $blockedReason
             ? Response::deny($blockedReason)
             : Response::allow();
     }
 
-    public function blockedReason(string $command): ?string
+    public function blockedReason(string $command, ?TerminalSession $terminalSession = null, ?User $user = null): ?string
     {
-        return CommandLog::blockedReasonFor($command);
+        return CommandLog::blockedReasonFor($command, $this->commandPolicy($terminalSession, $user));
+    }
+
+    private function commandPolicy(?TerminalSession $terminalSession, ?User $user): string
+    {
+        $terminalSession?->loadMissing('vm');
+        $vm = $terminalSession?->vm;
+
+        if ($vm && $user && $vm->isSelfServiceOwnedBy($user)) {
+            return 'relaxed';
+        }
+
+        return 'strict';
     }
 
     private function canAccessSession(User $user, TerminalSession $terminalSession): bool

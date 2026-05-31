@@ -13,7 +13,7 @@ class CommandLog extends Model
      * Daftar pola command yang berisiko merusak VM atau mengambil alih akun.
      * Policy menggunakan daftar ini sebagai kontrol dasar untuk terminal praktikum.
      */
-    public const BLOCKED_COMMAND_PATTERNS = [
+    public const STRICT_BLOCKED_COMMAND_PATTERNS = [
         '/\brm\s+-rf\s+(\/|\*)/i',
         '/\bmkfs(\.\w+)?\b/i',
         '/\bdd\s+.*\bof=\/dev\//i',
@@ -26,6 +26,19 @@ class CommandLog extends Model
         '/\buserdel\b/i',
         '/\bgroupdel\b/i',
     ];
+
+    public const RELAXED_BLOCKED_COMMAND_PATTERNS = [
+        '/\brm\s+-rf\s+(\/|\*)/i',
+        '/\bmkfs(\.\w+)?\b/i',
+        '/\bdd\s+.*\bof=\/dev\//i',
+        '/:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/',
+        '/\b(chmod|chown)\s+(-[A-Za-z]*R[A-Za-z]*|--recursive)\s+[^;&|]*\//i',
+    ];
+
+    /**
+     * Backward-compatible alias for the strict shared-practical policy.
+     */
+    public const BLOCKED_COMMAND_PATTERNS = self::STRICT_BLOCKED_COMMAND_PATTERNS;
 
     protected $fillable = [
         'terminal_session_id',
@@ -183,10 +196,10 @@ class CommandLog extends Model
         ])->save();
     }
 
-    public static function blockedReasonFor(string $command): ?string
+    public static function blockedReasonFor(string $command, string $policy = 'strict'): ?string
     {
         // Pemeriksaan dibuat terpusat agar form terminal dan WebSocket memakai policy yang sama.
-        foreach (self::BLOCKED_COMMAND_PATTERNS as $pattern) {
+        foreach (self::blockedPatternsFor($policy) as $pattern) {
             if (preg_match($pattern, $command) === 1) {
                 return 'Command diblokir oleh policy terminal.';
             }
@@ -198,5 +211,12 @@ class CommandLog extends Model
     public static function isCommandBlocked(string $command): bool
     {
         return self::blockedReasonFor($command) !== null;
+    }
+
+    private static function blockedPatternsFor(string $policy): array
+    {
+        return $policy === 'relaxed'
+            ? self::RELAXED_BLOCKED_COMMAND_PATTERNS
+            : self::STRICT_BLOCKED_COMMAND_PATTERNS;
     }
 }

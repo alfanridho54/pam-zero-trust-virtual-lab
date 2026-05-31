@@ -54,13 +54,27 @@ class SshCommandService
             }
 
             // Pada tahap ini policy sudah diperiksa oleh caller; service ini hanya melakukan eksekusi SSH.
+            Log::debug('SSH command dispatching.', [
+                'host' => $terminalSession->ssh_host,
+                'username' => $credentials['username'],
+                'port' => $credentials['port'],
+                'session_id' => $terminalSession->id,
+                'vm_id' => $terminalSession->vm_id,
+                'actual_command_sent_to_ssh' => $command,
+                'timeout_seconds' => $timeout,
+            ]);
+
             $output = $ssh->exec($command);
+            $stderr = (string) $ssh->getStdError();
 
             if ($output === false) {
                 $this->logCommandFailure(
                     $terminalSession,
                     $credentials,
                     'SSH command execution failed.',
+                    command: $command,
+                    stdout: '',
+                    stderr: $stderr,
                     exitCode: $ssh->getExitStatus(),
                 );
 
@@ -68,12 +82,31 @@ class SshCommandService
             }
 
             $exitCode = $ssh->getExitStatus();
+            $stdoutExcerpt = $this->safeOutputExcerpt($output, $terminalSession);
+            $stderrExcerpt = $this->safeOutputExcerpt($stderr, $terminalSession);
+
+            Log::debug('SSH command completed.', [
+                'host' => $terminalSession->ssh_host,
+                'username' => $credentials['username'],
+                'port' => $credentials['port'],
+                'session_id' => $terminalSession->id,
+                'vm_id' => $terminalSession->vm_id,
+                'original_command' => $command,
+                'actual_command_sent_to_ssh' => $command,
+                'exit_code' => $exitCode,
+                'stdout' => $stdoutExcerpt,
+                'stderr' => $stderrExcerpt,
+            ]);
 
             if ($exitCode !== 0) {
+                $reason = 'SSH command exited with a non-zero status.';
                 $this->logCommandFailure(
                     $terminalSession,
                     $credentials,
-                    'SSH command exited with a non-zero status.',
+                    $reason,
+                    command: $command,
+                    stdout: $output,
+                    stderr: $stderr,
                     exitCode: $exitCode,
                 );
             }
@@ -90,6 +123,7 @@ class SshCommandService
                 $credentials,
                 'SSH command execution failed.',
                 $exception,
+                command: $command,
             );
 
             return $this->failed($started, 'SSH command execution failed.');
@@ -109,7 +143,7 @@ class SshCommandService
         ];
     }
 
-    protected function resolveCredentials(TerminalSession $terminalSession): array
+    public function resolveCredentials(TerminalSession $terminalSession): array
     {
         $vm = $terminalSession->vm;
         $dynamicVm = (bool) $vm?->isProvisionedStudentVm();
@@ -186,18 +220,48 @@ class SshCommandService
         array $credentials,
         string $message,
         ?Throwable $exception = null,
+        ?string $command = null,
+        ?string $stdout = null,
+        ?string $stderr = null,
         ?int $exitCode = null,
     ): void {
+        $stdoutExcerpt = $stdout === null ? null : $this->safeOutputExcerpt($stdout, $terminalSession);
+        $stderrExcerpt = $stderr === null ? null : $this->safeOutputExcerpt($stderr, $terminalSession);
+
         Log::warning('SSH command failed.', [
             'host' => $terminalSession->ssh_host,
             'username' => $credentials['username'] ?? $terminalSession->ssh_username,
             'port' => $credentials['port'] ?? $terminalSession->ssh_port,
             'session_id' => $terminalSession->id,
             'vm_id' => $terminalSession->vm_id,
+            'original_command' => $command,
+            'actual_command_sent_to_ssh' => $command,
+            'stdout' => $stdoutExcerpt,
+            'stderr' => $stderrExcerpt,
             'exception_class' => $exception ? $exception::class : null,
             'exception_message' => $exception?->getMessage() ?: $message,
             'exit_code' => $exitCode,
+            'failure_reason' => $this->failureReason($message, $exitCode, $stdoutExcerpt, $stderrExcerpt),
         ]);
+    }
+
+    private function safeOutputExcerpt(string $output, TerminalSession $terminalSession): string
+    {
+        $excerpt = str($output)->replace("\0", '')->limit(1000, "\n[output truncated]")->toString();
+
+        foreach ([
+            config('services.terminal.ssh_password'),
+            $terminalSession->vm?->sshPassword(),
+            $terminalSession->vm?->sshPrivateKey(),
+        ] as $secret) {
+            if (! is_string($secret) || $secret === '') {
+                continue;
+            }
+
+            $excerpt = str_replace($secret, '[redacted]', $excerpt);
+        }
+
+        return $excerpt;
     }
 
     private function failed(int $started, string $message): SshCommandResult
@@ -214,5 +278,24 @@ class SshCommandService
     private function durationMs(int $started): int
     {
         return (int) round((hrtime(true) - $started) / 1_000_000);
+    }
+
+    private function failureReason(string $message, ?int $exitCode, ?string $stdout, ?string $stderr): string
+    {
+        if ($exitCode !== null) {
+            $streams = [];
+
+            if (is_string($stdout) && $stdout !== '') {
+                $streams[] = 'stdout present';
+            }
+
+            if (is_string($stderr) && $stderr !== '') {
+                $streams[] = 'stderr present';
+            }
+
+            return trim($message.' exit_code='.$exitCode.($streams ? ' ('.implode(', ', $streams).')' : ''));
+        }
+
+        return $message;
     }
 }

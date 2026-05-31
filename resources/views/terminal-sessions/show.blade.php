@@ -9,6 +9,7 @@
     $subtitle = ($terminalSession->vm?->name ?? 'VM') . ' - interactive monitored terminal';
     $logs = $commandLogs ?? collect();
     $accessError = $terminalAccessError ?? null;
+    $terminalMode = $terminalMode ?? 'command';
     $statusClass = $terminalSession->isActive()
         ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
         : ($terminalSession->isEnded()
@@ -92,7 +93,7 @@
                         <p class="mt-1 break-all font-mono text-xs text-slate-500">{{ $terminalWebSocketUrl ?: 'WebSocket URL is not configured.' }}</p>
                     </div>
                     <span id="ws-status" class="inline-flex rounded-full bg-slate-800 px-2.5 py-1 text-xs font-bold text-slate-300">
-                        {{ $interactiveEnabled ? 'connecting' : 'unavailable' }}
+                        {{ $interactiveEnabled ? ($terminalMode === 'pty' ? 'connecting pty' : 'connecting') : 'unavailable' }}
                     </span>
                 </div>
 
@@ -104,16 +105,16 @@
                     @elseif (! $interactiveEnabled)
                         <div class="mt-3 text-amber-300">Interactive terminal is unavailable for ended, expired, revoked, or closed sessions.</div>
                     @else
-                        <div class="mt-3 text-slate-500">Connecting to monitored WebSocket transport...</div>
+                        <div class="mt-3 text-slate-500">{{ $terminalMode === 'pty' ? 'Connecting to interactive PTY shell...' : 'Connecting to monitored WebSocket transport...' }}</div>
                     @endif
                 </div>
 
                 <form id="ws-command-form" class="flex flex-col gap-3 border-t border-slate-800 bg-slate-950 px-5 py-4 sm:flex-row" autocomplete="off">
-                    <label class="sr-only" for="ws-command">Interactive command</label>
+                    <label class="sr-only" for="ws-command">{{ $terminalMode === 'pty' ? 'PTY input' : 'Interactive command' }}</label>
                     <input
                         id="ws-command"
                         class="min-h-11 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 font-mono text-sm text-slate-100 outline-none ring-indigo-500/30 placeholder:text-slate-500 focus:border-indigo-500 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50"
-                        placeholder="Type a command and press Enter"
+                        placeholder="{{ $terminalMode === 'pty' ? 'Type shell input and press Enter' : 'Type a command and press Enter' }}"
                         @disabled(! $interactiveEnabled)
                     >
                     <button
@@ -174,6 +175,7 @@
             (() => {
                 const wsUrl = @json($terminalWebSocketUrl);
                 const ticket = @json($terminalWebSocketTicket);
+                const terminalMode = @json($terminalMode);
                 const terminal = document.getElementById('ws-terminal');
                 const status = document.getElementById('ws-status');
                 const form = document.getElementById('ws-command-form');
@@ -224,12 +226,17 @@
                             prompt = message.prompt || prompt;
                             setStatus('connected', 'bg-emerald-100 text-emerald-700');
                             input.disabled = false;
-                            writeLine(`connected to ${prompt}`, 'text-emerald-300');
+                            writeLine(terminalMode === 'pty' ? `interactive PTY connected to ${prompt}` : `connected to ${prompt}`, 'text-emerald-300');
                             return;
                         }
 
                         if (message.type === 'running') {
                             writeLine(`${prompt}:~$ ${message.command}`, 'text-slate-100');
+                            return;
+                        }
+
+                        if (message.type === 'pty_output') {
+                            String(message.output || '').split(/\r?\n/).forEach((line) => writeLine(line, 'text-slate-300'));
                             return;
                         }
 

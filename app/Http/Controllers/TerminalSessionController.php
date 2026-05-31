@@ -12,9 +12,11 @@ use App\Models\Vm;
 use App\Services\ProxmoxService;
 use App\Services\SshCommandService;
 use App\Services\SshReadinessService;
+use App\Services\TerminalPtySessionService;
 use App\Services\VmSshHostRefreshService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
@@ -98,7 +100,7 @@ class TerminalSessionController extends Controller
             ->with('status', $message);
     }
 
-    public function show(Request $request, TerminalSession $terminalSession, SshReadinessService $sshReadiness, VmSshHostRefreshService $sshHostRefresh): View
+    public function show(Request $request, TerminalSession $terminalSession, SshReadinessService $sshReadiness, VmSshHostRefreshService $sshHostRefresh, TerminalPtySessionService $ptySessionService): View
     {
         $user = $this->resolveDashboardUser($request);
         abort_unless($user, 403, 'Anda tidak memiliki akses ke VM ini.');
@@ -122,6 +124,7 @@ class TerminalSessionController extends Controller
             'defaultCommand' => self::DEFAULT_TEST_COMMAND,
             'terminalWebSocketUrl' => config('services.terminal.websocket_url'),
             'terminalWebSocketTicket' => $terminalAccessError ? null : $this->makeWebSocketTicket($terminalSession, $user),
+            'terminalMode' => $ptySessionService->canOpen($terminalSession, $user) ? 'pty' : 'command',
             'terminalAccessError' => $terminalAccessError,
         ]);
     }
@@ -140,8 +143,18 @@ class TerminalSessionController extends Controller
         $sshHostRefresh->refreshSession($terminalSession);
         $this->refreshSshReadiness($terminalSession, $sshReadiness);
 
-        $command = trim((string) $request->input('command', self::DEFAULT_TEST_COMMAND));
+        $originalCommand = (string) $request->input('command', self::DEFAULT_TEST_COMMAND);
+        $command = trim($originalCommand);
         $command = $command !== '' ? $command : self::DEFAULT_TEST_COMMAND;
+
+        Log::debug('PAM terminal form command received.', [
+            'session_id' => $terminalSession->id,
+            'vm_id' => $terminalSession->vm_id,
+            'user_id' => $user->id,
+            'original_command' => $originalCommand,
+            'normalized_command' => $command,
+            'transport' => 'form',
+        ]);
 
         if (mb_strlen($command) > 1000) {
             $commandLog = $this->createCommandLog($terminalSession, $user, $command);
@@ -192,7 +205,26 @@ class TerminalSessionController extends Controller
             $result->successful
                 ? $commandLog->markSucceeded($result->exitCode, $result->durationMs, $outputExcerpt)
                 : $commandLog->markFailed($result->exitCode, $result->durationMs, $outputExcerpt);
-        } catch (Throwable) {
+            Log::debug('PAM terminal form SSH result received.', [
+                'session_id' => $terminalSession->id,
+                'vm_id' => $terminalSession->vm_id,
+                'user_id' => $user->id,
+                'normalized_command' => $command,
+                'status' => $result->successful ? 'succeeded' : 'failed',
+                'exit_code' => $result->exitCode,
+                'ssh_output' => $outputExcerpt,
+                'ssh_error' => $result->error,
+            ]);
+        } catch (Throwable $exception) {
+            Log::debug('PAM terminal form command exception.', [
+                'session_id' => $terminalSession->id,
+                'vm_id' => $terminalSession->vm_id,
+                'user_id' => $user->id,
+                'normalized_command' => $command,
+                'exception_class' => $exception::class,
+                'exception_message' => $exception->getMessage(),
+            ]);
+
             $commandLog->markFailed(null, null, 'SSH command execution failed.');
         }
 

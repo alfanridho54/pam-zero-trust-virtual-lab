@@ -4,14 +4,17 @@ namespace Tests\Feature;
 
 use App\Enums\CommandLogStatus;
 use App\Enums\TerminalSessionStatus;
+use App\Console\Commands\TerminalWebSocketServer;
 use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
 use App\Services\ProxmoxService;
 use App\Services\SshCommandResult;
 use App\Services\SshCommandService;
+use App\Services\TerminalPtySessionService;
 use App\Services\TerminalWebSocketCommandService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use ReflectionMethod;
 use Tests\TestCase;
 
 class TerminalWebSocketCommandTest extends TestCase
@@ -89,6 +92,75 @@ class TerminalWebSocketCommandTest extends TestCase
             'command' => 'whoami',
             'status' => CommandLogStatus::Succeeded->value,
         ]);
+    }
+
+    public function test_self_service_vm_is_eligible_for_pty_terminal_mode(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->terminalSessionFor($user, vmMetadata: [
+            'ssh_private_key' => "-----BEGIN OPENSSH PRIVATE KEY-----\nfake-test-key\n-----END OPENSSH PRIVATE KEY-----",
+        ]);
+
+        $this->assertTrue($this->app->make(TerminalPtySessionService::class)->canOpen($terminalSession, $user));
+    }
+
+    public function test_shared_practical_vm_remains_command_mode_only(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user);
+
+        $this->assertFalse($this->app->make(TerminalPtySessionService::class)->canOpen($terminalSession, $user));
+    }
+
+    public function test_unauthorized_student_cannot_open_pty_for_another_users_vm(): void
+    {
+        $owner = $this->student();
+        $otherStudent = $this->student();
+        $terminalSession = $this->terminalSessionFor($owner);
+
+        $this->assertFalse($this->app->make(TerminalPtySessionService::class)->canOpen($terminalSession, $otherStudent));
+    }
+
+    public function test_revoked_and_expired_sessions_cannot_open_pty_mode(): void
+    {
+        $user = $this->student();
+        $revokedSession = $this->terminalSessionFor($user, [
+            'status' => TerminalSessionStatus::Revoked,
+            'ended_at' => now(),
+        ]);
+        $expiredSession = $this->terminalSessionFor($user, [
+            'status' => TerminalSessionStatus::Active,
+            'expires_at' => now()->subMinute(),
+        ]);
+        $ptyService = $this->app->make(TerminalPtySessionService::class);
+
+        $this->assertFalse($ptyService->canOpen($revokedSession, $user));
+        $this->assertFalse($ptyService->canOpen($expiredSession, $user));
+        $this->assertSame(TerminalSessionStatus::Expired, $expiredSession->refresh()->status);
+    }
+
+    public function test_websocket_receive_rejects_short_frame_without_unsafe_offsets(): void
+    {
+        if (! function_exists('stream_socket_pair')) {
+            $this->markTestSkipped('stream_socket_pair is not available in this PHP build.');
+        }
+
+        $sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+
+        if ($sockets === false) {
+            $this->markTestSkipped('Unable to create local socket pair.');
+        }
+
+        [$client, $server] = $sockets;
+        fwrite($client, chr(129));
+        fclose($client);
+
+        $receive = new ReflectionMethod(TerminalWebSocketServer::class, 'receive');
+        $receive->setAccessible(true);
+
+        $this->assertNull($receive->invoke($this->app->make(TerminalWebSocketServer::class), $server));
+
+        fclose($server);
     }
 
     public function test_shared_practical_websocket_command_uses_refreshed_ip(): void
