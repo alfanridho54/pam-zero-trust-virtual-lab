@@ -63,17 +63,12 @@ class TerminalSessionPolicy
             return false;
         }
 
-        // RBAC sederhana: admin/guru dapat supervisi, student dibatasi pada VM miliknya.
+        // RBAC sederhana: admin dapat supervisi, student dibatasi pada VM miliknya.
         if ($user->role === 'admin') {
             return true;
         }
 
-        if ($user->role === 'guru') {
-            // TODO: Batasi ke siswa bimbingan setelah relasi guru-siswa tersedia.
-            return true;
-        }
-
-        return in_array($user->role, ['student', 'mahasiswa', 'siswa'], true)
+        return $user->role === 'student'
             && ($vm->user_id === $user->id || $vm->hasPracticalAccess($user));
     }
 

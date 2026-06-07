@@ -161,7 +161,7 @@ class DashboardController extends Controller
     public function assignVm(Request $request, Vm $vm): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
-        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk assign VM.');
+        abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses untuk assign VM.');
 
         if (! $this->canAssignVm($vm)) {
             $this->audit($user?->id, $vm->id, 'dashboard.vm.assignment.blocked', 'Assignment VM diblokir karena VM dilindungi atau sudah dihapus.', [
@@ -203,7 +203,7 @@ class DashboardController extends Controller
     public function unassignVm(Request $request, Vm $vm): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
-        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk unassign VM.');
+        abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses untuk unassign VM.');
 
         if (! $this->canAssignVm($vm)) {
             $this->audit($user?->id, $vm->id, 'dashboard.vm.unassignment.blocked', 'Unassign VM diblokir karena VM dilindungi atau sudah dihapus.', [
@@ -237,7 +237,7 @@ class DashboardController extends Controller
     public function bulkGenerateManagedVms(Request $request): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
-        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk bulk generate VM.');
+        abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses untuk bulk generate VM.');
 
         $data = $request->validate([
             'source_vm_id' => ['required', 'integer', 'exists:vms,id'],
@@ -351,7 +351,7 @@ class DashboardController extends Controller
     public function markSharedPractical(Request $request, Vm $vm): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
-        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk mengubah shared practical VM.');
+        abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses untuk mengubah shared practical VM.');
 
         if (! $this->canSharePracticalVm($vm)) {
             $this->audit($user?->id, $vm->id, 'dashboard.vm.shared_practical.blocked', 'Mark shared practical VM diblokir.', [
@@ -378,7 +378,7 @@ class DashboardController extends Controller
     public function unmarkSharedPractical(Request $request, Vm $vm): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
-        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk mengubah shared practical VM.');
+        abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses untuk mengubah shared practical VM.');
 
         if ($vm->trashed() || $vm->isProtectedVm()) {
             return back()->with('error', 'VM system, critical, atau soft-deleted tidak bisa diubah.');
@@ -398,7 +398,7 @@ class DashboardController extends Controller
     public function grantPracticalAccess(Request $request, Vm $vm): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
-        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk grant shared VM.');
+        abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses untuk grant shared VM.');
 
         if (! $this->canSharePracticalVm($vm)) {
             return back()->with('error', 'VM system, critical, atau soft-deleted tidak bisa dishare.');
@@ -440,7 +440,7 @@ class DashboardController extends Controller
     public function revokePracticalAccess(Request $request, Vm $vm): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
-        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses untuk revoke shared VM.');
+        abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses untuk revoke shared VM.');
 
         $data = $this->validatePracticalAccessRequest($request);
         $students = $this->targetStudentsForAccess($data);
@@ -464,7 +464,7 @@ class DashboardController extends Controller
     public function updateVmSshMetadata(Request $request, Vm $vm): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
-        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses ke konfigurasi SSH VM.');
+        abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses ke konfigurasi SSH VM.');
 
         $data = $request->validate([
             'ssh_host' => ['nullable', 'string', 'max:255'],
@@ -520,7 +520,7 @@ class DashboardController extends Controller
     public function refreshVmSshMetadata(Request $request, Vm $vm): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
-        abort_unless(in_array($this->roleFor($user), ['admin', 'guru'], true), 403, 'Anda tidak memiliki akses ke konfigurasi SSH VM.');
+        abort_unless($this->roleFor($user) === 'admin', 403, 'Anda tidak memiliki akses ke konfigurasi SSH VM.');
 
         $vmid = $vm->proxmoxVmid();
 
@@ -561,7 +561,7 @@ class DashboardController extends Controller
         $user = $this->resolveDashboardUser($request);
         $role = $this->roleFor($user);
 
-        if (! in_array($role, ['admin', 'guru'], true)) {
+        if ($role !== 'admin') {
             $this->audit($user?->id, null, 'dashboard.proxmox.vm.denied', 'Action VM dashboard ditolak untuk role non-admin.', [
                 'node' => $node,
                 'vmid' => $vmid,
@@ -707,10 +707,9 @@ class DashboardController extends Controller
             ->with(['user', 'labTemplate', 'vmTemplate', 'practicalAccesses.user'])
             ->latest();
 
-        // Isolasi VM lokal: siswa hanya melihat resource miliknya, admin/guru untuk supervisi.
+        // Isolasi VM lokal: siswa hanya melihat resource miliknya, admin untuk supervisi.
         return match ($this->roleFor($user)) {
             'admin' => $query->get(),
-            'guru' => $query->get(), // TODO: Batasi ke siswa bimbingan setelah relasi guru-siswa tersedia.
             'student' => $user
                 ? $query
                     ->where(fn ($query) => $query
@@ -1084,11 +1083,6 @@ class DashboardController extends Controller
             return true;
         }
 
-        if ($role === 'guru') {
-            // TODO: Batasi ke siswa bimbingan setelah relasi guru-siswa tersedia.
-            return true;
-        }
-
         if ($role === 'student') {
             // Siswa hanya bisa mengontrol VM Proxmox yang terikat ke record lokal miliknya.
             return $user !== null
@@ -1103,8 +1097,7 @@ class DashboardController extends Controller
     {
         return match ($user?->role) {
             'admin' => 'admin',
-            'guru', 'teacher' => 'guru',
-            'student', 'mahasiswa', 'siswa' => 'student',
+            'student' => 'student',
             default => 'guest',
         };
     }
@@ -1295,7 +1288,7 @@ class DashboardController extends Controller
 
     private function studentRoles(): array
     {
-        return ['student', 'mahasiswa', 'siswa'];
+        return ['student'];
     }
 
     private function resolveDashboardUser(Request $request): ?User

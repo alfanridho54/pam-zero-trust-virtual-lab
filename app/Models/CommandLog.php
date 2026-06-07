@@ -156,13 +156,8 @@ class CommandLog extends Model
             return true;
         }
 
-        if ($user->role === 'guru') {
-            // TODO: Batasi ke siswa bimbingan setelah relasi guru-siswa tersedia.
-            return true;
-        }
-
         // Siswa hanya dapat melihat command miliknya pada sesi terminal miliknya.
-        return in_array($user->role, ['student', 'mahasiswa', 'siswa'], true)
+        return $user->role === 'student'
             && $this->isOwnedBy($user)
             && $this->terminalSession?->isOwnedBy($user);
     }

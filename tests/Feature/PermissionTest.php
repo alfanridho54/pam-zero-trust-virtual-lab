@@ -52,7 +52,7 @@ class PermissionTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_teacher_can_view_all_vms(): void
+    public function test_admin_can_view_all_vms(): void
     {
         $this->seed();
 

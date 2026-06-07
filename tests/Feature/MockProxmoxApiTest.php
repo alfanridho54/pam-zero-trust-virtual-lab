@@ -18,7 +18,8 @@ class MockProxmoxApiTest extends TestCase
         $this->seed();
 
         $this->assertSame('admin@lab.test', User::find(1)->email);
-        $this->assertSame('teacher@lab.test', User::find(2)->email);
+        $this->assertSame('admin2@lab.test', User::find(2)->email);
+        $this->assertSame('admin', User::find(2)->role);
         $this->assertSame('siswa1@lab.test', User::find(3)->email);
         $this->assertSame('student', User::find(3)->role);
 

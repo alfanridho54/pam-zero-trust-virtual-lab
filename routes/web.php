@@ -30,7 +30,7 @@ Route::get('/', function (Request $request) {
     }
 
     if ($user) {
-        return in_array($user->role, ['student', 'mahasiswa', 'siswa'], true)
+        return $user->role === 'student'
             ? redirect()->route('student.dashboard')
             : redirect()->route('dashboard');
     }

@@ -5,7 +5,7 @@ Base URL: `/api`
 Mock mode memakai `owner_id` atau `user_id` pada request untuk menentukan user aktif. Data seed utama:
 
 - `owner_id=1` admin: `admin@lab.test`
-- `owner_id=2` guru: `teacher@lab.test`
+- `owner_id=2` admin: `admin2@lab.test`
 - `owner_id=3` siswa: `siswa1@lab.test`
 - `owner_id=4` siswa: `siswa2@lab.test`
 

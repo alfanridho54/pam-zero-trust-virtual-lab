@@ -12,7 +12,7 @@ class VmPolicy
      */
     public function viewAny(User $user): bool
     {
-        return in_array($this->roleFor($user), ['admin', 'guru', 'student'], true);
+        return in_array($this->roleFor($user), ['admin', 'student'], true);
     }
 
     /**
@@ -20,7 +20,8 @@ class VmPolicy
      */
     public function view(User $user, Vm $vm): bool
     {
-        return $this->canSupervise($user) || $vm->user_id === $user->id;
+        return $this->canSupervise($user)
+            || ($vm->isStudentVisible() && ($vm->user_id === $user->id || $vm->hasPracticalAccess($user)));
     }
 
     /**
@@ -65,15 +66,14 @@ class VmPolicy
 
     private function canSupervise(User $user): bool
     {
-        return in_array($this->roleFor($user), ['admin', 'guru'], true);
+        return $this->roleFor($user) === 'admin';
     }
 
     private function roleFor(User $user): string
     {
         return match ($user->role) {
             'admin' => 'admin',
-            'guru', 'teacher' => 'guru',
-            'student', 'mahasiswa', 'siswa' => 'student',
+            'student' => 'student',
             default => 'guest',
         };
     }

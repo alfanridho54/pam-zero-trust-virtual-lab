@@ -84,7 +84,7 @@
     @endif
 
     @if (in_array($section, ['overview', 'templates'], true))
-        @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
+        @if ($currentUser?->role === 'admin')
             <x-card title="Create VM Template" subtitle="Proxmox template source for student self-service provisioning." class="mb-6">
                 <form method="POST" action="{{ route('dashboard.vm-templates.store') }}" class="grid gap-4 p-6 lg:grid-cols-4">
                     @csrf
@@ -116,7 +116,7 @@
                             <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">RAM</th>
                             <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Disk</th>
                             <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
-                            @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
+                            @if ($currentUser?->role === 'admin')
                                 <th class="px-6 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Manage</th>
                             @endif
                         </tr>
@@ -137,7 +137,7 @@
                                 <td class="px-6 py-4">
                                     <x-badge :type="$template->enabled ? 'running' : 'inactive'">{{ $template->enabled ? 'enabled' : 'disabled' }}</x-badge>
                                 </td>
-                                @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
+                                @if ($currentUser?->role === 'admin')
                                     <td class="px-6 py-4">
                                         <details>
                                             <summary class="cursor-pointer text-xs font-semibold text-slate-600 hover:text-slate-900">Edit</summary>
@@ -284,7 +284,7 @@
             </div>
         </x-card>
 
-        <!-- @if (in_array($currentUser?->role, ['admin', 'guru', 'teacher'], true))
+        <!-- @if ($currentUser?->role === 'admin')
             <x-card title="Bulk Managed Practical VM" subtitle="Clone one practical VM per selected siswa from a safe source template VM." class="mb-8">
                 <form method="POST" action="{{ route('dashboard.vms.bulk-managed-generation.store') }}" class="grid gap-4 p-6 lg:grid-cols-[minmax(14rem,1fr)_minmax(14rem,1fr)_auto]">
                     @csrf

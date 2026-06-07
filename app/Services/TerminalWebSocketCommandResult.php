@@ -9,6 +9,7 @@ final readonly class TerminalWebSocketCommandResult
         public string $command,
         public ?string $status,
         public string $output,
+        public ?string $sessionStatus = null,
     ) {
     }
 
@@ -19,6 +20,7 @@ final readonly class TerminalWebSocketCommandResult
             'command' => $this->command,
             'status' => $this->status,
             'output' => $this->output,
+            'session_status' => $this->sessionStatus,
         ], fn ($value) => $value !== null);
     }
 }

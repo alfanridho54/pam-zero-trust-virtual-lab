@@ -163,13 +163,8 @@ class TerminalSession extends Model
             return true;
         }
 
-        if ($user->role === 'guru') {
-            // TODO: Batasi ke siswa bimbingan setelah relasi guru-siswa tersedia.
-            return true;
-        }
-
         // Siswa hanya boleh melihat sesi miliknya pada VM milik sendiri atau yang dishare.
-        return in_array($user->role, ['student', 'mahasiswa', 'siswa'], true)
+        return $user->role === 'student'
             && $this->isOwnedBy($user)
             && ($this->vm?->user_id === $user->id || (bool) $this->vm?->hasPracticalAccess($user));
     }

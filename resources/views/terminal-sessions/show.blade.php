@@ -63,7 +63,7 @@
             <div class="border-b border-slate-100 p-5 md:border-b-0 md:border-r">
                 <p class="text-xs font-bold uppercase tracking-wider text-slate-500">Status</p>
                 <p class="mt-2">
-                    <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-bold ring-1 ring-inset {{ $statusClass }}">{{ $status }}</span>
+                    <span id="session-status-badge" class="inline-flex rounded-full px-2.5 py-1 text-xs font-bold ring-1 ring-inset {{ $statusClass }}">{{ $status }}</span>
                 </p>
             </div>
             <div class="border-b border-slate-100 p-5 md:border-b-0 md:border-r">
@@ -178,6 +178,7 @@
                 const terminalMode = @json($terminalMode);
                 const terminal = document.getElementById('ws-terminal');
                 const status = document.getElementById('ws-status');
+                const sessionStatusBadge = document.getElementById('session-status-badge');
                 const form = document.getElementById('ws-command-form');
                 const input = document.getElementById('ws-command');
                 const fallbackPanel = document.getElementById('fallback-command-panel');
@@ -187,6 +188,24 @@
                 const setStatus = (label, classes) => {
                     status.textContent = label;
                     status.className = `inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${classes}`;
+                };
+
+                const setSessionStatus = (label) => {
+                    if (! sessionStatusBadge || ! label) {
+                        return;
+                    }
+
+                    const normalized = String(label).toLowerCase();
+                    const classes = {
+                        active: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
+                        pending: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+                        closed: 'bg-red-50 text-red-700 ring-red-600/20',
+                        expired: 'bg-red-50 text-red-700 ring-red-600/20',
+                        revoked: 'bg-red-50 text-red-700 ring-red-600/20',
+                    }[normalized] || 'bg-slate-50 text-slate-700 ring-slate-600/20';
+
+                    sessionStatusBadge.textContent = normalized;
+                    sessionStatusBadge.className = `inline-flex rounded-full px-2.5 py-1 text-xs font-bold ring-1 ring-inset ${classes}`;
                 };
 
                 const writeLine = (text, className = 'text-slate-300') => {
@@ -241,6 +260,7 @@
                         }
 
                         if (['output', 'failed', 'blocked'].includes(message.type)) {
+                            setSessionStatus(message.session_status);
                             const outputClass = message.type === 'output' ? 'text-slate-300' : 'text-red-300';
                             String(message.output || '').split(/\r?\n/).forEach((line) => writeLine(line, outputClass));
                             return;

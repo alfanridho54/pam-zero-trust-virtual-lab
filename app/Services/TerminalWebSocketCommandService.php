@@ -77,6 +77,7 @@ class TerminalWebSocketCommandService
                 ],
             ])->save();
         }
+        $terminalSession->refresh();
 
         $commandLog = $this->createCommandLog($terminalSession, $user, $command);
 
@@ -118,6 +119,7 @@ class TerminalWebSocketCommandService
             $command,
             $commandLog->status->value,
             $outputExcerpt,
+            $terminalSession->status->value,
         );
     }
 

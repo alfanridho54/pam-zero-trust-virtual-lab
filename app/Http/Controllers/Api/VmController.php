@@ -21,9 +21,11 @@ class VmController extends Controller
         if ($request->filled('owner_id') || $request->filled('user_id') || $request->user()) {
             $user = $this->mockUser($request);
 
-            if ($user->role === 'student') {
-                // API VM menjaga isolasi ownership: siswa hanya menerima VM miliknya.
-                $query->where('user_id', $user->id);
+            if ($this->isStudent($user)) {
+                // API VM menjaga isolasi ownership: siswa hanya menerima VM miliknya atau VM praktikum yang dishare.
+                $query->where(fn ($query) => $query
+                    ->where('user_id', $user->id)
+                    ->orWhereHas('practicalAccesses', fn ($accessQuery) => $accessQuery->where('user_id', $user->id)));
             }
         }
 
@@ -91,16 +93,15 @@ class VmController extends Controller
     public function show(Request $request, Vm $vm): JsonResponse
     {
         $user = $this->mockUser($request);
-        // Semua operasi VM pribadi mengunci akses pada pemilik record lokal.
-        abort_unless($vm->user_id === $user->id, 403);
+        abort_unless($this->canViewVm($user, $vm), 403);
 
-        return response()->json(['data' => $vm->load('labTemplate')]);
+        return response()->json(['data' => $vm->load(['labTemplate', 'practicalAccesses'])]);
     }
 
     public function update(Request $request, Vm $vm): JsonResponse
     {
         $user = $this->mockUser($request);
-        abort_unless($vm->user_id === $user->id, 403);
+        abort_unless($this->canModifyVm($user, $vm), 403);
 
         $data = $request->validate([
             'owner_id' => ['sometimes', 'exists:users,id'],
@@ -130,7 +131,7 @@ class VmController extends Controller
     public function destroy(Request $request, Vm $vm): JsonResponse
     {
         $user = $this->mockUser($request);
-        abort_unless($vm->user_id === $user->id, 403);
+        abort_unless($this->canModifyVm($user, $vm), 403);
 
         $proxmox = $this->proxmox->deleteVm($vm);
         $vmId = $vm->id;
@@ -162,6 +163,43 @@ class VmController extends Controller
             ->studentVisible()
             ->get()
             ->filter(fn (Vm $vm) => $vm->isStudentVisible() && ! $vm->isManagedAssignment() && ! $vm->isSharedPractical());
+    }
+
+
+    private function canViewVm(User $user, Vm $vm): bool
+    {
+        if ($this->isAdmin($user)) {
+            return true;
+        }
+
+        return $this->isStudent($user)
+            && $vm->isStudentVisible()
+            && ($vm->user_id === $user->id || $vm->hasPracticalAccess($user));
+    }
+
+    private function canModifyVm(User $user, Vm $vm): bool
+    {
+        if ($vm->isProtectedVm()) {
+            return false;
+        }
+
+        if ($this->isAdmin($user)) {
+            return true;
+        }
+
+        return $this->isStudent($user)
+            && $vm->user_id === $user->id
+            && ! $vm->isSharedPractical();
+    }
+
+    private function isAdmin(User $user): bool
+    {
+        return $user->role === 'admin';
+    }
+
+    private function isStudent(User $user): bool
+    {
+        return $user->role === 'student';
     }
 
     private function mockUser(Request $request): User

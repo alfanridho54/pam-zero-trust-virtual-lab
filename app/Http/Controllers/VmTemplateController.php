@@ -92,7 +92,7 @@ class VmTemplateController extends Controller
     private function authorizedTemplateManager(Request $request): User
     {
         $user = $request->user();
-        abort_unless($user instanceof User && in_array($user->role, ['admin', 'guru', 'teacher'], true), 403, 'Anda tidak memiliki akses template VM.');
+        abort_unless($user instanceof User && $user->role === 'admin', 403, 'Anda tidak memiliki akses template VM.');
 
         return $user;
     }

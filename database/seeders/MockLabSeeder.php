@@ -19,7 +19,7 @@ class MockLabSeeder extends Seeder
 
         $users = [
             ['name' => 'Admin Lab', 'email' => 'admin@lab.test', 'role' => 'admin'],
-            ['name' => 'Teacher Lab', 'email' => 'teacher@lab.test', 'role' => 'guru'],
+            ['name' => 'Admin Supervisor', 'email' => 'admin2@lab.test', 'role' => 'admin'],
             ['name' => 'Siswa 1', 'email' => 'siswa1@lab.test', 'role' => 'student'],
             ['name' => 'Siswa 2', 'email' => 'siswa2@lab.test', 'role' => 'student'],
             ['name' => 'Alfan Ridho', 'email' => 'alfanridho507@gmail.com', 'role' => 'admin'],

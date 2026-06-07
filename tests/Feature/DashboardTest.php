@@ -297,13 +297,13 @@ class DashboardTest extends TestCase
             ->assertDontSee('secret-ssh-password');
     }
 
-    public function test_guru_cannot_access_soc_monitoring_dashboard(): void
+    public function test_student_cannot_access_soc_monitoring_dashboard(): void
     {
         $this->seed();
 
-        $guru = User::where('email', 'teacher@lab.test')->firstOrFail();
+        $student = User::where('email', 'siswa1@lab.test')->firstOrFail();
 
-        $this->actingAs($guru)
+        $this->actingAs($student)
             ->get(route('dashboard.soc'))
             ->assertForbidden();
     }

@@ -137,7 +137,7 @@ class Vm extends Model
 
     public function isSelfServiceOwnedBy(User $user): bool
     {
-        return in_array($user->role, ['student', 'mahasiswa', 'siswa'], true)
+        return $user->role === 'student'
             && $this->user_id === $user->id
             && ! $this->isSharedPractical();
     }

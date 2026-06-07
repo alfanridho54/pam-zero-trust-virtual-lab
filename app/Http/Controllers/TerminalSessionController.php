@@ -484,7 +484,7 @@ class TerminalSessionController extends Controller
 
     private function isStudentRole(User $user): bool
     {
-        return in_array($user->role, ['student', 'mahasiswa', 'siswa'], true);
+        return $user->role === 'student';
     }
 
     private function audit(User $user, ?Vm $vm, string $action, string $description, array $metadata = []): void

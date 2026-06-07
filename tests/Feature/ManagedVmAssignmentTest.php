@@ -24,7 +24,7 @@ class ManagedVmAssignmentTest extends TestCase
     {
         $admin = User::factory()->create(['role' => 'admin']);
         $student = User::factory()->create(['role' => 'student']);
-        $vm = $this->vm(['user_id' => null, 'name' => 'Guru Practical VM']);
+        $vm = $this->vm(['user_id' => null, 'name' => 'Admin Practical VM']);
 
         $this->actingAs($admin)
             ->post(route('dashboard.vms.assignment.store', $vm), [
@@ -52,13 +52,13 @@ class ManagedVmAssignmentTest extends TestCase
         $this->assertFalse($vm->metadata['managed_assignment']);
     }
 
-    public function test_guru_can_assign_existing_vm_to_student(): void
+    public function test_admin_can_assign_existing_vm_to_student(): void
     {
-        $guru = User::factory()->create(['role' => 'guru']);
+        $admin = User::factory()->create(['role' => 'admin']);
         $student = User::factory()->create(['role' => 'student']);
         $vm = $this->vm(['user_id' => null]);
 
-        $this->actingAs($guru)
+        $this->actingAs($admin)
             ->post(route('dashboard.vms.assignment.store', $vm), [
                 'student_id' => $student->id,
             ])
@@ -71,12 +71,12 @@ class ManagedVmAssignmentTest extends TestCase
     public function test_assignment_requires_student_role(): void
     {
         $admin = User::factory()->create(['role' => 'admin']);
-        $teacher = User::factory()->create(['role' => 'guru']);
+        $manager = User::factory()->create(['role' => 'admin']);
         $vm = $this->vm(['user_id' => null]);
 
         $this->actingAs($admin)
             ->post(route('dashboard.vms.assignment.store', $vm), [
-                'student_id' => $teacher->id,
+                'student_id' => $manager->id,
             ])
             ->assertSessionHasErrors('student_id');
 
@@ -292,9 +292,9 @@ class ManagedVmAssignmentTest extends TestCase
         ]);
     }
 
-    public function test_guru_can_bulk_generate_managed_vms_for_all_students(): void
+    public function test_admin_can_bulk_generate_managed_vms_for_all_students(): void
     {
-        $guru = User::factory()->create(['role' => 'guru']);
+        $admin = User::factory()->create(['role' => 'admin']);
         $students = User::factory()->count(3)->create(['role' => 'student']);
         $sourceVm = $this->vm([
             'user_id' => null,
@@ -304,7 +304,7 @@ class ManagedVmAssignmentTest extends TestCase
 
         $this->fakeManagedCloneService();
 
-        $this->actingAs($guru)
+        $this->actingAs($admin)
             ->post(route('dashboard.vms.bulk-managed-generation.store'), [
                 'source_vm_id' => $sourceVm->id,
                 'target_mode' => 'all',
@@ -484,19 +484,6 @@ class ManagedVmAssignmentTest extends TestCase
         ]);
     }
 
-    public function test_guru_can_mark_vm_as_shared_practical(): void
-    {
-        $guru = User::factory()->create(['role' => 'guru']);
-        $vm = $this->vm(['user_id' => null]);
-
-        $this->actingAs($guru)
-            ->post(route('dashboard.vms.shared-practical.store', $vm))
-            ->assertRedirect()
-            ->assertSessionHas('status');
-
-        $this->assertTrue($vm->refresh()->isSharedPractical());
-    }
-
     public function test_admin_can_grant_shared_access_to_one_student(): void
     {
         $admin = User::factory()->create(['role' => 'admin']);
@@ -519,13 +506,13 @@ class ManagedVmAssignmentTest extends TestCase
         ]);
     }
 
-    public function test_guru_can_grant_shared_access_to_all_students(): void
+    public function test_admin_can_grant_shared_access_to_all_students(): void
     {
-        $guru = User::factory()->create(['role' => 'guru']);
+        $admin = User::factory()->create(['role' => 'admin']);
         $students = User::factory()->count(3)->create(['role' => 'student']);
         $vm = $this->vm(['user_id' => null]);
 
-        $this->actingAs($guru)
+        $this->actingAs($admin)
             ->post(route('dashboard.vms.practical-accesses.store', $vm), [
                 'target_mode' => 'all',
             ])
@@ -536,7 +523,7 @@ class ManagedVmAssignmentTest extends TestCase
             $this->assertDatabaseHas('practical_vm_accesses', [
                 'vm_id' => $vm->id,
                 'user_id' => $student->id,
-                'assigned_by' => $guru->id,
+                'assigned_by' => $admin->id,
             ]);
         }
     }

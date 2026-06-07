@@ -234,7 +234,7 @@ class StudentVmController extends Controller
         $user = Auth::user() ?: $request->user() ?: $this->resolveCloudflareUser($request);
 
         abort_unless($user instanceof User, 403, 'Anda harus login sebagai student.');
-        abort_unless(in_array($user->role, ['student', 'mahasiswa', 'siswa'], true), 403, 'Halaman ini hanya untuk student.');
+        abort_unless($user->role === 'student', 403, 'Halaman ini hanya untuk student.');
 
         return $user;
     }

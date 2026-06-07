@@ -11,7 +11,7 @@ use Illuminate\Http\JsonResponse;
 class AuditLogController extends Controller
 {
     /**
-     * Audit log adalah data monitoring lintas user, sehingga endpoint ini hanya untuk admin/guru.
+     * Audit log adalah data monitoring lintas user, sehingga endpoint ini hanya untuk admin.
      */
     public function index(Request $request): JsonResponse
     {
@@ -60,6 +60,6 @@ class AuditLogController extends Controller
         }
 
         // Siswa tidak boleh membaca audit global karena dapat berisi aktivitas user lain.
-        abort_unless(in_array($user->role, ['admin', 'guru'], true), 403);
+        abort_unless($user->role === 'admin', 403);
     }
 }

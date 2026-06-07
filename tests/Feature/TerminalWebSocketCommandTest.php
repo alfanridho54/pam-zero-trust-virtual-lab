@@ -94,6 +94,36 @@ class TerminalWebSocketCommandTest extends TestCase
         ]);
     }
 
+    public function test_pending_websocket_session_becomes_active_after_first_allowed_command(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, [
+            'status' => TerminalSessionStatus::Pending,
+            'last_activity_at' => now()->subMinutes(10),
+        ]);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: true,
+                    exitCode: 0,
+                    durationMs: 12,
+                    output: "/home/student01\n",
+                );
+            }
+        });
+
+        $result = $this->app->make(TerminalWebSocketCommandService::class)
+            ->run($terminalSession, $user, 'pwd');
+
+        $this->assertSame('output', $result->type);
+        $this->assertSame(TerminalSessionStatus::Active->value, $result->sessionStatus);
+        $this->assertSame(TerminalSessionStatus::Active, $terminalSession->refresh()->status);
+        $this->assertSame(TerminalSessionStatus::Active->value, $result->toPayload()['session_status']);
+    }
+
     public function test_self_service_vm_is_eligible_for_pty_terminal_mode(): void
     {
         $user = $this->student();
