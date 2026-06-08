@@ -1,5 +1,6 @@
 @php
     $shortSession = fn (?string $uuid) => $uuid ? substr($uuid, 0, 8) : '-';
+    $filters = $socFilters ?? [];
 @endphp
 
 <x-layouts.app title="SOC Monitoring" :user="$currentUser">
@@ -23,10 +24,75 @@
                 </div>
                 <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
                     <p class="text-xs font-bold uppercase tracking-wide text-slate-500">Commands</p>
-                    <p class="mt-1 text-2xl font-bold text-slate-950">{{ $recentCommandLogs->count() }}</p>
+                    <p class="mt-1 text-2xl font-bold text-slate-950">{{ $filteredCommandLogCount ?? $recentCommandLogs->count() }}</p>
                 </div>
             </div>
         </div>
+
+        <x-card title="Command Log Filters" subtitle="Filter practical terminal activity by student, VM, status, or date range.">
+            <form method="GET" action="{{ route('dashboard.soc') }}" class="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+                <div>
+                    <label for="user_id" class="text-xs font-bold uppercase tracking-wide text-slate-500">Student/User</label>
+                    <select id="user_id" name="user_id" class="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                        <option value="">All students</option>
+                        @foreach ($socFilterUsers as $filterUser)
+                            <option value="{{ $filterUser->id }}" @selected(($filters['user_id'] ?? '') == $filterUser->id)>
+                                {{ $filterUser->name }} ({{ $filterUser->email }})
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
+
+                <div>
+                    <label for="vm_id" class="text-xs font-bold uppercase tracking-wide text-slate-500">VM</label>
+                    <select id="vm_id" name="vm_id" class="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                        <option value="">All VMs</option>
+                        @foreach ($socFilterVms as $filterVm)
+                            <option value="{{ $filterVm->id }}" @selected(($filters['vm_id'] ?? '') == $filterVm->id)>{{ $filterVm->name }}</option>
+                        @endforeach
+                    </select>
+                </div>
+
+                <div>
+                    <label for="status" class="text-xs font-bold uppercase tracking-wide text-slate-500">Command Status</label>
+                    <select id="status" name="status" class="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                        <option value="">All statuses</option>
+                        @foreach ($commandStatusOptions as $status)
+                            <option value="{{ $status }}" @selected(($filters['status'] ?? '') === $status)>{{ ucfirst($status) }}</option>
+                        @endforeach
+                    </select>
+                </div>
+
+                <div>
+                    <label for="session_status" class="text-xs font-bold uppercase tracking-wide text-slate-500">Session Status</label>
+                    <select id="session_status" name="session_status" class="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                        <option value="">All sessions</option>
+                        @foreach ($terminalSessionStatusOptions as $status)
+                            <option value="{{ $status }}" @selected(($filters['session_status'] ?? '') === $status)>{{ ucfirst($status) }}</option>
+                        @endforeach
+                    </select>
+                </div>
+
+                <div>
+                    <label for="date_from" class="text-xs font-bold uppercase tracking-wide text-slate-500">From</label>
+                    <input id="date_from" name="date_from" type="date" value="{{ $filters['date_from'] ?? '' }}" class="mt-1 min-h-10 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                </div>
+
+                <div>
+                    <label for="date_to" class="text-xs font-bold uppercase tracking-wide text-slate-500">To</label>
+                    <input id="date_to" name="date_to" type="date" value="{{ $filters['date_to'] ?? '' }}" class="mt-1 min-h-10 w-full rounded-lg border border-slate-200 px-3 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                </div>
+
+                <div class="flex flex-wrap items-end gap-2 md:col-span-2 xl:col-span-6">
+                    <button type="submit" class="inline-flex min-h-10 items-center justify-center rounded-lg bg-indigo-600 px-4 text-sm font-bold text-white shadow-sm hover:bg-indigo-700">
+                        Apply filters
+                    </button>
+                    <a href="{{ route('dashboard.soc') }}" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                        Reset
+                    </a>
+                </div>
+            </form>
+        </x-card>
 
         <x-card title="Active Terminal Sessions" subtitle="Only active sessions can be revoked from this console.">
             <div class="overflow-x-auto">
@@ -94,16 +160,18 @@
                     <table class="min-w-full divide-y divide-slate-200">
                         <thead class="bg-slate-50">
                             <tr>
+                                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Timestamp</th>
                                 <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">User</th>
                                 <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">VM / Session</th>
                                 <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Command</th>
                                 <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Status</th>
-                                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Timestamp</th>
+                                <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Blocked Reason</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100 bg-white">
                             @forelse ($recentCommandLogs as $commandLog)
                                 <tr class="hover:bg-slate-50/70">
+                                    <td class="px-4 py-3.5 font-mono text-xs text-slate-500">{{ $commandLog['executed_at']?->format('Y-m-d H:i:s') ?? '-' }}</td>
                                     <td class="px-4 py-3.5 text-sm">
                                         <div class="font-semibold text-slate-900">{{ $commandLog['user_name'] }}</div>
                                         <div class="text-xs text-slate-500">{{ $commandLog['user_email'] }}</div>
@@ -114,14 +182,19 @@
                                     </td>
                                     <td class="px-4 py-3.5"><code class="rounded bg-slate-100 px-2 py-1 font-mono text-xs text-slate-700">{{ $commandLog['command'] }}</code></td>
                                     <td class="px-4 py-3.5"><x-badge :type="$commandLog['status_class']">{{ $commandLog['status'] }}</x-badge></td>
-                                    <td class="px-4 py-3.5 font-mono text-xs text-slate-500">{{ $commandLog['executed_at']?->format('Y-m-d H:i:s') ?? '-' }}</td>
+                                    <td class="px-4 py-3.5 text-xs font-medium text-slate-600">{{ $commandLog['blocked_reason'] ?? '-' }}</td>
                                 </tr>
                             @empty
-                                <tr><td colspan="5"><x-empty-state message="No command logs yet." /></td></tr>
+                                <tr><td colspan="6"><x-empty-state message="No command logs match the selected filters." /></td></tr>
                             @endforelse
                         </tbody>
                     </table>
                 </div>
+                @if (method_exists($recentCommandLogs, 'links'))
+                    <div class="border-t border-slate-100 px-4 py-3">
+                        {{ $recentCommandLogs->links() }}
+                    </div>
+                @endif
             </x-card>
 
             <x-card title="Blocked Command Monitoring" subtitle="Restricted commands blocked by terminal policy." :danger="true">

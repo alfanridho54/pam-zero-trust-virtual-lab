@@ -308,6 +308,43 @@ class DashboardTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_admin_can_filter_soc_command_logs_by_student(): void
+    {
+        $this->seed();
+
+        $admin = User::where('email', 'admin@lab.test')->firstOrFail();
+        $student = User::where('email', 'siswa1@lab.test')->firstOrFail();
+        $otherStudent = User::where('email', 'siswa2@lab.test')->firstOrFail();
+        $vm = $this->createVmForOwner($student, 'Filtered Student VM');
+        $otherVm = $this->createVmForOwner($otherStudent, 'Other Filtered VM');
+        $terminalSession = $this->createTerminalSession($student, $vm);
+        $otherTerminalSession = $this->createTerminalSession($otherStudent, $otherVm);
+
+        CommandLog::create([
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $student->id,
+            'vm_id' => $vm->id,
+            'command' => 'student-filter-visible-command',
+            'status' => CommandLogStatus::Succeeded,
+            'executed_at' => now(),
+        ]);
+
+        CommandLog::create([
+            'terminal_session_id' => $otherTerminalSession->id,
+            'user_id' => $otherStudent->id,
+            'vm_id' => $otherVm->id,
+            'command' => 'other-student-hidden-command',
+            'status' => CommandLogStatus::Succeeded,
+            'executed_at' => now(),
+        ]);
+
+        $this->actingAs($admin)
+            ->get(route('dashboard.soc', ['user_id' => $student->id]))
+            ->assertOk()
+            ->assertSee('student-filter-visible-command')
+            ->assertDontSee('other-student-hidden-command');
+    }
+
     public function test_student_cannot_see_recent_command_logs_section(): void
     {
         $this->seed();

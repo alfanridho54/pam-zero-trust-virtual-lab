@@ -121,14 +121,22 @@ Or run both together:
 php artisan migrate --seed
 ```
 
-The demo seed data is intentionally safe:
+The normal seeder is intentionally non-destructive for existing infrastructure data. Outside the `testing` environment it creates demo users only and does not modify `vms`, `vm_templates`, `lab_templates`, Proxmox nodes, VMIDs, or SSH metadata.
+
+Optional disabled placeholder data can be enabled only when explicitly requested:
+
+```env
+ENABLE_DEMO_SEED_DATA=true
+```
+
+When enabled, placeholder rows use obvious `[DEMO DISABLED]` names and are disabled by default so they do not appear in student template selection.
+
+The demo user seed data is:
 
 - `admin@example.com` / `password`
 - `user@example.com` / `password`
 - `student@example.com` / `password`
 - lab-local demo accounts from `MockLabSeeder`
-- disabled `Demo Ubuntu Template`
-- inactive `Demo Shared Practical VM` pointing to `127.0.0.1`
 
 The seeders do not contain real SSH passwords, Proxmox secrets, Cloudflare secrets, or production credentials.
 

@@ -16,6 +16,21 @@ class MockLabSeeder extends Seeder
      */
     public function run(): void
     {
+        $this->seedDemoUsers();
+
+        if (app()->environment('testing')) {
+            $this->seedTestingTemplates();
+
+            return;
+        }
+
+        if (filter_var(env('ENABLE_DEMO_SEED_DATA', false), FILTER_VALIDATE_BOOLEAN)) {
+            $this->seedDisabledDemoPlaceholders();
+        }
+    }
+
+    private function seedDemoUsers(): void
+    {
         $password = Hash::make('password');
 
         $users = [
@@ -30,7 +45,7 @@ class MockLabSeeder extends Seeder
         ];
 
         foreach ($users as $user) {
-            User::updateOrCreate(
+            User::firstOrCreate(
                 ['email' => $user['email']],
                 [
                     'name' => $user['name'],
@@ -39,7 +54,10 @@ class MockLabSeeder extends Seeder
                 ],
             );
         }
+    }
 
+    private function seedTestingTemplates(): void
+    {
         $templates = [
             [
                 'name' => 'Linux Basic',
@@ -101,47 +119,49 @@ class MockLabSeeder extends Seeder
                 ],
             );
         }
+    }
 
-        VmTemplate::updateOrCreate(
-            ['name' => 'Demo Ubuntu Template'],
+    private function seedDisabledDemoPlaceholders(): void
+    {
+        VmTemplate::firstOrCreate(
+            ['name' => '[DEMO DISABLED] Placeholder Template'],
             [
-                'description' => 'Disabled placeholder template for documentation and demo screens only.',
+                'description' => 'Disabled placeholder only. Do not use for provisioning.',
                 'proxmox_template_id' => 9999,
-                'proxmox_node' => 'pve-placeholder',
+                'proxmox_node' => 'demo-disabled-placeholder',
                 'cpu' => 1,
                 'ram' => 1024,
                 'disk' => 10,
-                'ssh_username' => 'student',
+                'ssh_username' => 'demo-disabled',
                 'ssh_password' => null,
                 'enabled' => false,
             ],
         );
 
-        if (! app()->environment('testing')) {
-            Vm::updateOrCreate(
-                ['proxmox_id' => 'demo-shared-practical-placeholder'],
-                [
-                    'user_id' => null,
-                    'lab_template_id' => null,
-                    'vm_template_id' => null,
-                    'name' => 'Demo Shared Practical VM',
-                    'node' => 'pve-placeholder',
-                    'status' => 'stopped',
-                    'cpu_cores' => 1,
-                    'memory_mb' => 1024,
-                    'disk_gb' => 10,
-                    'metadata' => [
-                        'demo' => true,
-                        'inactive' => true,
-                        'shared_practical' => true,
-                        'managed_assignment' => true,
-                        'ssh_host' => '127.0.0.1',
-                        'ssh_port' => 22,
-                        'ssh_username' => 'student',
-                        'notes' => 'Placeholder only. Do not store real SSH secrets in seeders.',
-                    ],
+        Vm::firstOrCreate(
+            ['proxmox_id' => 'demo-disabled-placeholder-vm'],
+            [
+                'user_id' => null,
+                'lab_template_id' => null,
+                'vm_template_id' => null,
+                'name' => '[DEMO DISABLED] Placeholder VM',
+                'node' => 'demo-disabled-placeholder',
+                'status' => 'stopped',
+                'cpu_cores' => 1,
+                'memory_mb' => 1024,
+                'disk_gb' => 10,
+                'metadata' => [
+                    'demo' => true,
+                    'disabled' => true,
+                    'do_not_use_for_provisioning' => true,
+                    'shared_practical' => true,
+                    'managed_assignment' => true,
+                    'ssh_host' => '127.0.0.1',
+                    'ssh_port' => 22,
+                    'ssh_username' => 'demo-disabled',
+                    'notes' => 'Placeholder only. Do not store real SSH secrets in seeders.',
                 ],
-            );
-        }
+            ],
+        );
     }
 }

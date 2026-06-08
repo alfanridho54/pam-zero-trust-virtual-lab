@@ -80,14 +80,56 @@
             </div>
         </section>
 
+        <style>
+            #terminal-panel.is-maximized {
+                position: fixed;
+                inset: 0;
+                z-index: 9999;
+                display: flex;
+                width: 100vw;
+                height: 100vh;
+                flex-direction: column;
+                border-radius: 0;
+                border-width: 0;
+            }
+
+            #terminal-panel.is-maximized #ws-terminal {
+                flex: 1 1 auto;
+                min-height: 0;
+                overflow-y: auto;
+            }
+
+            body.terminal-maximized {
+                overflow: hidden;
+            }
+        </style>
+
         <section class="grid grid-cols-1 gap-6 xl:grid-cols-3">
-            <div class="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 shadow-sm xl:col-span-2">
+            <div id="terminal-panel" class="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 shadow-sm xl:col-span-2">
                 <div class="flex flex-col gap-3 border-b border-white/10 bg-white/[0.03] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                     <div class="min-w-0">
                         <div class="flex items-center gap-2">
-                            <span class="h-2.5 w-2.5 rounded-full bg-red-400/80"></span>
-                            <span class="h-2.5 w-2.5 rounded-full bg-amber-400/80"></span>
-                            <span class="h-2.5 w-2.5 rounded-full bg-emerald-400/80"></span>
+                            <button
+                                id="terminal-close-control"
+                                class="h-2.5 w-2.5 rounded-full bg-red-400/80 transition hover:bg-red-300 focus:outline-none focus:ring-2 focus:ring-red-300/50"
+                                type="button"
+                                title="Close / Back"
+                                aria-label="Close or go back"
+                            ></button>
+                            <button
+                                id="terminal-minimize-control"
+                                class="h-2.5 w-2.5 rounded-full bg-amber-400/80 transition hover:bg-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-300/50"
+                                type="button"
+                                title="Minimize"
+                                aria-label="Minimize terminal"
+                            ></button>
+                            <button
+                                id="terminal-maximize-control"
+                                class="h-2.5 w-2.5 cursor-pointer rounded-full bg-emerald-400/80 transition hover:bg-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-300/50"
+                                type="button"
+                                title="Maximize Terminal"
+                                aria-label="Maximize terminal"
+                            ></button>
                             <h3 class="ml-2 truncate text-sm font-semibold text-slate-100">Interactive terminal</h3>
                         </div>
                         <p class="mt-1 break-all font-mono text-xs text-slate-500">{{ $terminalWebSocketUrl ?: 'WebSocket URL is not configured.' }}</p>
@@ -169,6 +211,51 @@
             </div>
         </details>
     </div>
+
+    <script>
+        (() => {
+            const panel = document.getElementById('terminal-panel');
+            const terminal = document.getElementById('ws-terminal');
+            const input = document.getElementById('ws-command');
+            const closeControl = document.getElementById('terminal-close-control');
+            const maximizeControl = document.getElementById('terminal-maximize-control');
+
+            if (! panel || ! maximizeControl) {
+                return;
+            }
+
+            const setMaximized = (isMaximized) => {
+                panel.classList.toggle('is-maximized', isMaximized);
+                document.body.classList.toggle('terminal-maximized', isMaximized);
+                maximizeControl.title = isMaximized ? 'Exit maximize' : 'Maximize Terminal';
+                maximizeControl.setAttribute('aria-label', isMaximized ? 'Exit maximize' : 'Maximize terminal');
+
+                if (terminal) {
+                    terminal.scrollTop = terminal.scrollHeight;
+                }
+
+                if (isMaximized && input && ! input.disabled) {
+                    input.focus();
+                }
+            };
+
+            maximizeControl.addEventListener('click', () => {
+                setMaximized(! panel.classList.contains('is-maximized'));
+            });
+
+            closeControl?.addEventListener('click', () => {
+                if (panel.classList.contains('is-maximized')) {
+                    setMaximized(false);
+                }
+            });
+
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && panel.classList.contains('is-maximized')) {
+                    setMaximized(false);
+                }
+            });
+        })();
+    </script>
 
     @if ($interactiveEnabled)
         <script>

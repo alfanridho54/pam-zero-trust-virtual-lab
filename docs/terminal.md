@@ -34,6 +34,8 @@ Production deployments should run it with systemd as `pam-terminal-websocket`. N
 
 Interactive PTY mode is intended for Self-Service VMs owned by the student. It gives a more shell-like experience while still passing through PAM session authorization and logging boundaries.
 
+The terminal page includes a maximize/focus mode for small laptop or lab monitors. The green macOS-style window control expands the existing terminal panel to the full browser viewport without reloading the page or reconnecting the WebSocket session. Clicking the green control again, pressing `Esc`, or clicking the red control while maximized exits focus mode.
+
 ## Shared Practical VM vs Self-Service VM Terminal
 
 Shared Practical VM:
@@ -61,6 +63,8 @@ Admins can revoke active terminal sessions from monitoring workflows. Revoked se
 ## Command Logging And Restriction
 
 Each command is logged per authenticated user, VM, and terminal session. Monitored command mode can block destructive or inappropriate command patterns, especially for shared and protected targets.
+
+The SOC monitoring dashboard lets admins filter command logs by student/user, VM, command status, terminal session status, and date range. This helps teachers or admins verify whether a selected student is actively working during practical sessions while keeping command visibility scoped to the admin-only monitoring route. Teacher/guru scoping can be extended later if a teacher role and allowed-student authorization model are added.
 
 ## Fallback Behavior
 

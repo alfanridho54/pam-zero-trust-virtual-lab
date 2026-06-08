@@ -16,6 +16,7 @@ use App\Services\ProxmoxService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -656,6 +657,7 @@ class DashboardController extends Controller
             ->values();
         $role = $this->roleFor($user);
         $canViewPamMonitoring = $role === 'admin';
+        $socFilters = $canViewPamMonitoring ? $this->commandLogFilters(request()) : [];
         $vmTemplates = VmTemplate::query()
             ->when($role === 'student', fn ($query) => $query->enabled())
             ->orderBy('name')
@@ -674,10 +676,16 @@ class DashboardController extends Controller
             'sourceTemplateVms' => $this->sourceTemplateVms(),
             'auditLogs' => $this->dashboardAuditLogs($user, $role),
             'canViewPamMonitoring' => $canViewPamMonitoring,
-            'recentCommandLogs' => $canViewPamMonitoring ? $this->recentCommandLogs() : collect(),
-            'activeTerminalSessions' => $canViewPamMonitoring ? $this->activeTerminalSessions() : collect(),
-            'blockedCommandLogs' => $canViewPamMonitoring ? $this->blockedCommandLogs() : collect(),
-            'terminalActivityTimeline' => $canViewPamMonitoring ? $this->terminalActivityTimeline() : collect(),
+            'socFilters' => $socFilters,
+            'socFilterUsers' => $canViewPamMonitoring ? $this->commandLogFilterUsers() : collect(),
+            'socFilterVms' => $canViewPamMonitoring ? $this->commandLogFilterVms() : collect(),
+            'commandStatusOptions' => array_map(fn (CommandLogStatus $status) => $status->value, CommandLogStatus::cases()),
+            'terminalSessionStatusOptions' => array_map(fn (TerminalSessionStatus $status) => $status->value, TerminalSessionStatus::cases()),
+            'recentCommandLogs' => $canViewPamMonitoring ? $this->recentCommandLogs($socFilters) : collect(),
+            'activeTerminalSessions' => $canViewPamMonitoring ? $this->activeTerminalSessions($socFilters) : collect(),
+            'blockedCommandLogs' => $canViewPamMonitoring ? $this->blockedCommandLogs($socFilters) : collect(),
+            'terminalActivityTimeline' => $canViewPamMonitoring ? $this->terminalActivityTimeline($socFilters) : collect(),
+            'filteredCommandLogCount' => $canViewPamMonitoring ? $this->commandLogQuery($socFilters)->count() : 0,
             'stats' => [
                 'templates' => VmTemplate::count(),
                 'vms' => $realVms->isNotEmpty() ? $realVms->count() : $visibleLocalVms->count(),
@@ -877,19 +885,82 @@ class DashboardController extends Controller
         ];
     }
 
-    private function recentCommandLogs(): Collection
+    private function commandLogFilters(Request $request): array
     {
-        return CommandLog::with(['user', 'vm', 'terminalSession'])
-            ->recent()
-            ->limit(10)
-            ->get()
-            ->map(fn (CommandLog $log) => $this->formatCommandLog($log));
+        $validated = Validator::make($request->query(), [
+            'user_id' => ['nullable', 'integer', 'exists:users,id'],
+            'vm_id' => ['nullable', 'integer', 'exists:vms,id'],
+            'status' => ['nullable', Rule::in(array_map(fn (CommandLogStatus $status) => $status->value, CommandLogStatus::cases()))],
+            'session_status' => ['nullable', Rule::in(array_map(fn (TerminalSessionStatus $status) => $status->value, TerminalSessionStatus::cases()))],
+            'date_from' => ['nullable', 'date_format:Y-m-d'],
+            'date_to' => ['nullable', 'date_format:Y-m-d'],
+        ])->validate();
+
+        return collect($validated)
+            ->filter(fn ($value) => $value !== null && $value !== '')
+            ->all();
     }
 
-    private function activeTerminalSessions(): Collection
+    private function commandLogFilterUsers(): Collection
+    {
+        return User::query()
+            ->whereIn('role', $this->studentRoles())
+            ->where(fn ($query) => $query
+                ->whereHas('commandLogs')
+                ->orWhereHas('terminalSessions'))
+            ->orderBy('name')
+            ->get(['id', 'name', 'email']);
+    }
+
+    private function commandLogFilterVms(): Collection
+    {
+        return Vm::query()
+            ->where(fn ($query) => $query
+                ->whereHas('commandLogs')
+                ->orWhereHas('terminalSessions'))
+            ->orderBy('name')
+            ->get(['id', 'name']);
+    }
+
+    private function commandLogQuery(array $filters): Builder
+    {
+        return CommandLog::query()
+            ->with(['user', 'vm', 'terminalSession'])
+            ->when($filters['user_id'] ?? null, fn (Builder $query, int|string $userId) => $query->where('user_id', $userId))
+            ->when($filters['vm_id'] ?? null, fn (Builder $query, int|string $vmId) => $query->where('vm_id', $vmId))
+            ->when($filters['status'] ?? null, fn (Builder $query, string $status) => $query->where('status', $status))
+            ->when($filters['session_status'] ?? null, fn (Builder $query, string $status) => $query->whereHas(
+                'terminalSession',
+                fn (Builder $sessionQuery) => $sessionQuery->where('status', $status),
+            ))
+            ->when($filters['date_from'] ?? null, fn (Builder $query, string $date) => $query->where('executed_at', '>=', $date.' 00:00:00'))
+            ->when($filters['date_to'] ?? null, fn (Builder $query, string $date) => $query->where('executed_at', '<=', $date.' 23:59:59'));
+    }
+
+    private function terminalSessionQuery(array $filters): Builder
+    {
+        return TerminalSession::query()
+            ->with(['user', 'vm'])
+            ->when($filters['user_id'] ?? null, fn (Builder $query, int|string $userId) => $query->where('user_id', $userId))
+            ->when($filters['vm_id'] ?? null, fn (Builder $query, int|string $vmId) => $query->where('vm_id', $vmId))
+            ->when($filters['session_status'] ?? null, fn (Builder $query, string $status) => $query->where('status', $status))
+            ->when($filters['date_from'] ?? null, fn (Builder $query, string $date) => $query->where('started_at', '>=', $date.' 00:00:00'))
+            ->when($filters['date_to'] ?? null, fn (Builder $query, string $date) => $query->where('started_at', '<=', $date.' 23:59:59'));
+    }
+
+    private function recentCommandLogs(array $filters)
+    {
+        return $this->commandLogQuery($filters)
+            ->recent()
+            ->paginate(25)
+            ->withQueryString()
+            ->through(fn (CommandLog $log) => $this->formatCommandLog($log));
+    }
+
+    private function activeTerminalSessions(array $filters): Collection
     {
         // SOC menampilkan hanya sesi aktif yang belum melewati waktu kedaluwarsa.
-        return TerminalSession::with(['user', 'vm'])
+        return $this->terminalSessionQuery($filters)
             ->active()
             ->where(fn ($query) => $query
                 ->whereNull('expires_at')
@@ -900,10 +971,10 @@ class DashboardController extends Controller
             ->map(fn (TerminalSession $session) => $this->formatTerminalSession($session));
     }
 
-    private function blockedCommandLogs(): Collection
+    private function blockedCommandLogs(array $filters): Collection
     {
         // Command blocked disorot karena menjadi indikator percobaan melanggar policy terminal.
-        return CommandLog::with(['user', 'vm', 'terminalSession'])
+        return $this->commandLogQuery($filters)
             ->blocked()
             ->recent()
             ->limit(10)
@@ -911,10 +982,10 @@ class DashboardController extends Controller
             ->map(fn (CommandLog $log) => $this->formatCommandLog($log));
     }
 
-    private function terminalActivityTimeline(): Collection
+    private function terminalActivityTimeline(array $filters): Collection
     {
         // Timeline menyatukan lifecycle sesi dan command agar investigator melihat urutan kejadian.
-        $sessions = TerminalSession::with(['user', 'vm'])
+        $sessions = $this->terminalSessionQuery($filters)
             ->latest('started_at')
             ->limit(10)
             ->get()
@@ -950,7 +1021,7 @@ class DashboardController extends Controller
                 return $items;
             });
 
-        $commands = CommandLog::with(['user', 'vm', 'terminalSession'])
+        $commands = $this->commandLogQuery($filters)
             ->recent()
             ->limit(20)
             ->get()
@@ -981,13 +1052,27 @@ class DashboardController extends Controller
             'user_email' => $log->user?->email ?? '',
             'vm_name' => $log->vm?->name ?? '-',
             'session_uuid' => $log->terminalSession?->session_uuid,
-            'command' => $log->command,
+            'command' => $this->safeCommandText($log),
             'status' => $log->status->value,
             'status_class' => $this->commandStatusBadgeClass($log->status->value),
             'blocked_reason' => $log->blocked_reason,
             'executed_at' => $log->executed_at ?? $log->created_at,
             'output_excerpt' => $this->safeCommandOutputExcerpt($log),
         ];
+    }
+
+    private function safeCommandText(CommandLog $log): string
+    {
+        $command = str($log->command)
+            ->replace("\0", '')
+            ->limit(300, '...')
+            ->toString();
+
+        foreach ($this->knownTerminalSecrets($log) as $secret) {
+            $command = str_replace($secret, '[redacted]', $command);
+        }
+
+        return $command;
     }
 
     private function formatTerminalSession(TerminalSession $session): array
@@ -1044,18 +1129,24 @@ class DashboardController extends Controller
             ->replace("\0", '')
             ->limit(600, "\n[output truncated]")
             ->toString();
-        $sshPassword = config('services.terminal.ssh_password');
-
-        foreach ([$sshPassword, $log->vm?->sshPassword(), $log->vm?->sshPrivateKey()] as $secret) {
-            if (! is_string($secret) || $secret === '') {
-                continue;
-            }
-
+        foreach ($this->knownTerminalSecrets($log) as $secret) {
             // Output SOC tidak boleh membocorkan password SSH yang mungkin ikut tercetak command.
             $excerpt = str_replace($secret, '[redacted]', $excerpt);
         }
 
         return $excerpt;
+    }
+
+    private function knownTerminalSecrets(CommandLog $log): array
+    {
+        return collect([
+            config('services.terminal.ssh_password'),
+            $log->vm?->sshPassword(),
+            $log->vm?->sshPrivateKey(),
+        ])
+            ->filter(fn ($secret) => is_string($secret) && $secret !== '')
+            ->values()
+            ->all();
     }
 
     private function findLocalVm(string $node, int $vmid): ?Vm
