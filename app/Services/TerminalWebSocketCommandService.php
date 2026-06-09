@@ -15,6 +15,7 @@ class TerminalWebSocketCommandService
 {
     private const MAX_COMMAND_LENGTH = 1000;
     private const OUTPUT_EXCERPT_LIMIT = 4000;
+    private const NO_OUTPUT_PLACEHOLDER = '(command completed with no output)';
 
     public function __construct(
         private readonly SshCommandService $sshCommandService,
@@ -84,7 +85,7 @@ class TerminalWebSocketCommandService
         try {
             // WebSocket hanya transport; eksekusi tetap lewat SSH service agar audit flow seragam.
             $result = $this->sshCommandService->execute($terminalSession, $command);
-            $outputExcerpt = $this->outputExcerpt($result->output ?: $result->error ?: 'SSH command execution failed.', $terminalSession);
+            $outputExcerpt = $this->outputExcerpt($this->displayOutput($result), $terminalSession);
 
             $result->successful
                 ? $commandLog->markSucceeded($result->exitCode, $result->durationMs, $outputExcerpt)
@@ -189,5 +190,22 @@ class TerminalWebSocketCommandService
         }
 
         return $excerpt;
+    }
+
+    private function displayOutput(SshCommandResult $result): string
+    {
+        if ($result->output !== '') {
+            return $result->output;
+        }
+
+        if ($result->stderr !== '') {
+            return $result->stderr;
+        }
+
+        if ($result->successful) {
+            return self::NO_OUTPUT_PLACEHOLDER;
+        }
+
+        return $result->error ?: 'SSH command execution failed.';
     }
 }

@@ -67,21 +67,24 @@ class SshCommandService
             $output = $ssh->exec($command);
             $stderr = (string) $ssh->getStdError();
 
-            if ($output === false) {
+            if ($output === false || $ssh->isTimeout()) {
+                $message = $ssh->isTimeout()
+                    ? 'SSH command timed out.'
+                    : 'SSH command execution failed.';
                 $this->logCommandFailure(
                     $terminalSession,
                     $credentials,
-                    'SSH command execution failed.',
+                    $message,
                     command: $command,
                     stdout: '',
                     stderr: $stderr,
-                    exitCode: $ssh->getExitStatus(),
+                    exitCode: $this->normalizeExitStatus($ssh->getExitStatus()),
                 );
 
-                return $this->failed($started, 'SSH command execution failed.');
+                return $this->failed($started, $message, $stderr);
             }
 
-            $exitCode = $ssh->getExitStatus();
+            $exitCode = $this->normalizeExitStatus($ssh->getExitStatus());
             $stdoutExcerpt = $this->safeOutputExcerpt($output, $terminalSession);
             $stderrExcerpt = $this->safeOutputExcerpt($stderr, $terminalSession);
 
@@ -98,7 +101,7 @@ class SshCommandService
                 'stderr' => $stderrExcerpt,
             ]);
 
-            if ($exitCode !== 0) {
+            if ($exitCode !== null && $exitCode !== 0) {
                 $reason = 'SSH command exited with a non-zero status.';
                 $this->logCommandFailure(
                     $terminalSession,
@@ -112,10 +115,11 @@ class SshCommandService
             }
 
             return new SshCommandResult(
-                successful: $exitCode === 0,
+                successful: $exitCode === null || $exitCode === 0,
                 exitCode: $exitCode,
                 durationMs: $this->durationMs($started),
                 output: $output,
+                stderr: $stderr,
             );
         } catch (Throwable $exception) {
             $this->logCommandFailure(
@@ -264,7 +268,7 @@ class SshCommandService
         return $excerpt;
     }
 
-    private function failed(int $started, string $message): SshCommandResult
+    private function failed(int $started, string $message, string $stderr = ''): SshCommandResult
     {
         return new SshCommandResult(
             successful: false,
@@ -272,7 +276,13 @@ class SshCommandService
             durationMs: $this->durationMs($started),
             output: '',
             error: $message,
+            stderr: $stderr,
         );
+    }
+
+    private function normalizeExitStatus(mixed $exitStatus): ?int
+    {
+        return is_int($exitStatus) ? $exitStatus : null;
     }
 
     private function durationMs(int $started): int

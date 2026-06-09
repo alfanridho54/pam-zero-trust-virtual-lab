@@ -10,6 +10,7 @@ final readonly class SshCommandResult
         public int $durationMs,
         public string $output,
         public ?string $error = null,
+        public string $stderr = '',
     ) {
     }
 }

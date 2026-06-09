@@ -94,6 +94,115 @@ class TerminalWebSocketCommandTest extends TestCase
         ]);
     }
 
+    public function test_websocket_command_with_empty_stdout_and_zero_exit_is_logged_as_succeeded(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, [
+            'status' => TerminalSessionStatus::Active,
+        ]);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: true,
+                    exitCode: 0,
+                    durationMs: 9,
+                    output: '',
+                );
+            }
+        });
+
+        $result = $this->app->make(TerminalWebSocketCommandService::class)
+            ->run($terminalSession, $user, 'touch usr');
+
+        $this->assertSame('output', $result->type);
+        $this->assertSame(CommandLogStatus::Succeeded->value, $result->status);
+        $this->assertSame('(command completed with no output)', $result->output);
+        $this->assertDatabaseHas('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $user->id,
+            'command' => 'touch usr',
+            'status' => CommandLogStatus::Succeeded->value,
+            'exit_code' => 0,
+            'output_excerpt' => '(command completed with no output)',
+        ]);
+    }
+
+    public function test_websocket_command_with_output_is_logged_as_succeeded(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, [
+            'status' => TerminalSessionStatus::Active,
+        ]);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: true,
+                    exitCode: 0,
+                    durationMs: 8,
+                    output: "test\n",
+                );
+            }
+        });
+
+        $result = $this->app->make(TerminalWebSocketCommandService::class)
+            ->run($terminalSession, $user, 'find test');
+
+        $this->assertSame('output', $result->type);
+        $this->assertSame(CommandLogStatus::Succeeded->value, $result->status);
+        $this->assertSame("test\n", $result->output);
+        $this->assertDatabaseHas('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $user->id,
+            'command' => 'find test',
+            'status' => CommandLogStatus::Succeeded->value,
+            'exit_code' => 0,
+            'output_excerpt' => "test\n",
+        ]);
+    }
+
+    public function test_websocket_command_with_non_zero_exit_status_is_logged_as_failed(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, [
+            'status' => TerminalSessionStatus::Active,
+        ]);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: false,
+                    exitCode: 1,
+                    durationMs: 13,
+                    output: '',
+                    stderr: "ping: connect: Network is unreachable\n",
+                );
+            }
+        });
+
+        $result = $this->app->make(TerminalWebSocketCommandService::class)
+            ->run($terminalSession, $user, 'ping -c 4 8.8.8.8');
+
+        $this->assertSame('failed', $result->type);
+        $this->assertSame(CommandLogStatus::Failed->value, $result->status);
+        $this->assertSame("ping: connect: Network is unreachable\n", $result->output);
+        $this->assertDatabaseHas('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $user->id,
+            'command' => 'ping -c 4 8.8.8.8',
+            'status' => CommandLogStatus::Failed->value,
+            'exit_code' => 1,
+            'output_excerpt' => "ping: connect: Network is unreachable\n",
+        ]);
+    }
+
     public function test_pending_websocket_session_becomes_active_after_first_allowed_command(): void
     {
         $user = $this->student();

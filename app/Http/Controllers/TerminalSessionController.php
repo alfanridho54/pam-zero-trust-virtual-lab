@@ -10,6 +10,7 @@ use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
 use App\Services\ProxmoxService;
+use App\Services\SshCommandResult;
 use App\Services\SshCommandService;
 use App\Services\SshReadinessService;
 use App\Services\TerminalPtySessionService;
@@ -28,6 +29,7 @@ class TerminalSessionController extends Controller
     private const DEFAULT_TEST_COMMAND = 'whoami && hostname && uptime';
 
     private const OUTPUT_EXCERPT_LIMIT = 4000;
+    private const NO_OUTPUT_PLACEHOLDER = '(command completed with no output)';
 
     /**
      * Membuka lifecycle sesi PAM untuk VM yang sudah lolos policy ownership.
@@ -200,7 +202,7 @@ class TerminalSessionController extends Controller
         try {
             // Eksekusi SSH selalu melewati service agar logging dan sanitasi output tetap konsisten.
             $result = $sshCommandService->execute($terminalSession, $command);
-            $outputExcerpt = $this->outputExcerpt($result->output ?: $result->error ?: 'SSH command execution failed.', $terminalSession);
+            $outputExcerpt = $this->outputExcerpt($this->displayOutput($result), $terminalSession);
 
             $result->successful
                 ? $commandLog->markSucceeded($result->exitCode, $result->durationMs, $outputExcerpt)
@@ -534,6 +536,23 @@ class TerminalSessionController extends Controller
         }
 
         return $excerpt;
+    }
+
+    private function displayOutput(SshCommandResult $result): string
+    {
+        if ($result->output !== '') {
+            return $result->output;
+        }
+
+        if ($result->stderr !== '') {
+            return $result->stderr;
+        }
+
+        if ($result->successful) {
+            return self::NO_OUTPUT_PLACEHOLDER;
+        }
+
+        return $result->error ?: 'SSH command execution failed.';
     }
 
     private function touchActivityWhenOpen(TerminalSession $terminalSession): void

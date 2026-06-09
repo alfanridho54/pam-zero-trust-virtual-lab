@@ -330,6 +330,112 @@ class TerminalCommandExecutionTest extends TestCase
         ]);
     }
 
+    public function test_shared_practical_command_with_empty_stdout_and_zero_exit_is_logged_as_succeeded(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: true,
+                    exitCode: 0,
+                    durationMs: 14,
+                    output: '',
+                );
+            }
+        });
+
+        $this->actingAs($user)
+            ->post(route('terminal-sessions.commands.store', $terminalSession), [
+                'command' => 'mkdir test',
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $this->assertDatabaseHas('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $user->id,
+            'command' => 'mkdir test',
+            'status' => CommandLogStatus::Succeeded->value,
+            'exit_code' => 0,
+            'output_excerpt' => '(command completed with no output)',
+        ]);
+    }
+
+    public function test_shared_practical_command_with_output_is_logged_as_succeeded(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: true,
+                    exitCode: 0,
+                    durationMs: 10,
+                    output: "test\n",
+                );
+            }
+        });
+
+        $this->actingAs($user)
+            ->post(route('terminal-sessions.commands.store', $terminalSession), [
+                'command' => 'find test',
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $this->assertDatabaseHas('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $user->id,
+            'command' => 'find test',
+            'status' => CommandLogStatus::Succeeded->value,
+            'exit_code' => 0,
+            'output_excerpt' => "test\n",
+        ]);
+    }
+
+    public function test_shared_practical_command_with_non_zero_exit_status_is_logged_as_failed(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user);
+
+        $this->app->instance(SshCommandService::class, new class extends SshCommandService
+        {
+            public function execute(TerminalSession $terminalSession, string $command, ?int $timeoutSeconds = null): SshCommandResult
+            {
+                return new SshCommandResult(
+                    successful: false,
+                    exitCode: 2,
+                    durationMs: 11,
+                    output: '',
+                    stderr: "ls: cannot access 'missing': No such file or directory\n",
+                );
+            }
+        });
+
+        $this->actingAs($user)
+            ->post(route('terminal-sessions.commands.store', $terminalSession), [
+                'command' => 'ls missing',
+            ])
+            ->assertRedirect()
+            ->assertSessionHas('error');
+
+        $this->assertDatabaseHas('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $user->id,
+            'command' => 'ls missing',
+            'status' => CommandLogStatus::Failed->value,
+            'exit_code' => 2,
+            'output_excerpt' => "ls: cannot access 'missing': No such file or directory\n",
+        ]);
+    }
+
     public function test_student_without_shared_practical_access_cannot_execute_command(): void
     {
         $user = $this->student();
