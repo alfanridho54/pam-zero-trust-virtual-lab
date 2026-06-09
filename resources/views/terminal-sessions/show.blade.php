@@ -5,6 +5,7 @@
     $targetPort = $terminalSession->ssh_port ?: 22;
     $targetAddress = $targetUsername . '@' . $targetHost;
     $targetEndpoint = $targetAddress . ':' . $targetPort;
+    $temporaryUsername = $terminalSession->temporaryUsername();
     $prompt = $targetAddress;
     $subtitle = ($terminalSession->vm?->name ?? 'VM') . ' - interactive monitored terminal';
     $logs = $commandLogs ?? collect();
@@ -73,6 +74,9 @@
             <div class="border-b border-slate-100 p-5 md:border-b-0 md:border-r">
                 <p class="text-xs font-bold uppercase tracking-wider text-slate-500">Target</p>
                 <p class="mt-2 break-all font-mono text-sm font-bold text-slate-950">{{ $targetEndpoint }}</p>
+                @if ($temporaryUsername)
+                    <p class="mt-1 break-all font-mono text-xs text-slate-500">JIT user: {{ $temporaryUsername }}</p>
+                @endif
             </div>
             <div class="p-5">
                 <p class="text-xs font-bold uppercase tracking-wider text-slate-500">Expires</p>

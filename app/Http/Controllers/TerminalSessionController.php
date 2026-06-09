@@ -13,6 +13,7 @@ use App\Services\ProxmoxService;
 use App\Services\SshCommandResult;
 use App\Services\SshCommandService;
 use App\Services\SshReadinessService;
+use App\Services\TemporaryVmCredentialService;
 use App\Services\TerminalPtySessionService;
 use App\Services\VmSshHostRefreshService;
 use Illuminate\Http\RedirectResponse;
@@ -35,7 +36,7 @@ class TerminalSessionController extends Controller
      * Membuka lifecycle sesi PAM untuk VM yang sudah lolos policy ownership.
      * Sesi dibuat sebagai pending agar akses SSH baru aktif saat command pertama dijalankan.
      */
-    public function store(Request $request, Vm $vm, ProxmoxService $proxmox, SshReadinessService $sshReadiness, VmSshHostRefreshService $sshHostRefresh): RedirectResponse
+    public function store(Request $request, Vm $vm, ProxmoxService $proxmox, SshReadinessService $sshReadiness, VmSshHostRefreshService $sshHostRefresh, TemporaryVmCredentialService $temporaryVmCredentialService): RedirectResponse
     {
         $user = $this->resolveDashboardUser($request);
         abort_unless($user, 403, 'Anda tidak memiliki akses ke VM ini.');
@@ -66,6 +67,10 @@ class TerminalSessionController extends Controller
         $sshReady = $vm->hasResolvedSshCredentials()
             || $sshReadiness->waitUntilReachable($sshHost, $sshPort);
 
+        if ($vm->isSharedPractical()) {
+            $this->closeDuplicateSharedPracticalSessions($vm, $user);
+        }
+
         $terminalSession = TerminalSession::create([
             'session_token' => $this->makeSessionToken(),
             'user_id' => $user->id,
@@ -93,13 +98,26 @@ class TerminalSessionController extends Controller
             'expires_at' => $terminalSession->expires_at?->toISOString(),
         ]);
 
+        $temporaryCredentialError = null;
+
+        if ($vm->isSharedPractical() && $sshReady && $vm->hasResolvedSshCredentials()) {
+            try {
+                $temporaryVmCredentialService->createTemporaryUser($vm, $terminalSession);
+                $terminalSession->refresh();
+            } catch (Throwable $exception) {
+                $temporaryCredentialError = $exception->getMessage();
+            }
+        }
+
         $message = $sshReady
             ? 'Terminal session dibuat. SSH siap digunakan.'
             : 'Terminal session dibuat. SSH VM masih disiapkan, silakan tunggu sebentar lalu refresh halaman ini.';
 
-        return redirect()
-            ->route('terminal-sessions.show', $terminalSession)
-            ->with('status', $message);
+        $redirect = redirect()->route('terminal-sessions.show', $terminalSession);
+
+        return $temporaryCredentialError
+            ? $redirect->with('error', $temporaryCredentialError)
+            : $redirect->with('status', $message);
     }
 
     public function show(Request $request, TerminalSession $terminalSession, SshReadinessService $sshReadiness, VmSshHostRefreshService $sshHostRefresh, TerminalPtySessionService $ptySessionService): View
@@ -269,10 +287,9 @@ class TerminalSessionController extends Controller
 
         $revokedAt = now();
 
-        // Revoke adalah penghentian paksa oleh admin; timestamp disamakan untuk jejak audit yang jelas.
+        // Revoke hanya menutup sesi dan menandai cleanup pending; SSH cleanup dijalankan oleh command terpisah.
+        $terminalSession->revoke($revokedAt);
         $terminalSession->forceFill([
-            'status' => TerminalSessionStatus::Revoked,
-            'ended_at' => $revokedAt,
             'last_activity_at' => $revokedAt,
         ])->save();
 
@@ -293,6 +310,30 @@ class TerminalSessionController extends Controller
         } while (TerminalSession::where('session_token', $token)->exists());
 
         return $token;
+    }
+
+    private function closeDuplicateSharedPracticalSessions(Vm $vm, User $user): void
+    {
+        TerminalSession::query()
+            ->where('user_id', $user->id)
+            ->where('vm_id', $vm->id)
+            ->whereNull('ended_at')
+            ->whereIn('status', [
+                TerminalSessionStatus::Pending->value,
+                TerminalSessionStatus::Active->value,
+            ])
+            ->get()
+            ->each(function (TerminalSession $session): void {
+                $session->close(now());
+
+                Log::info('Duplicate Shared Practical terminal session closed before opening a new one.', [
+                    'terminal_session_id' => $session->id,
+                    'vm_id' => $session->vm_id,
+                    'user_id' => $session->user_id,
+                    'temporary_username' => $session->temporaryUsername(),
+                    'temporary_credential_status' => $session->temporaryCredentialStatus(),
+                ]);
+            });
     }
 
     private function debugSessionAccessMessage(?User $user, TerminalSession $terminalSession, string $method): string
@@ -417,6 +458,15 @@ class TerminalSessionController extends Controller
             return 'SSH is still starting inside this VM. Please wait a moment, then refresh this terminal session.';
         }
 
+        if ($terminalSession->vm?->isSharedPractical()) {
+            $credential = $terminalSession->temporaryCredentialMetadata();
+            $status = $credential['status'] ?? null;
+
+            if (in_array($status, ['failed', 'creating'], true)) {
+                return (string) ($credential['last_error'] ?? 'Temporary Linux user is not ready for this Shared Practical VM session.');
+            }
+        }
+
         return null;
     }
 
@@ -514,6 +564,7 @@ class TerminalSessionController extends Controller
             'metadata' => [
                 'source' => 'terminal-session-poc',
                 'client_ip' => request()->ip(),
+                'temporary_username' => $terminalSession->temporaryUsername(),
             ],
         ]);
     }

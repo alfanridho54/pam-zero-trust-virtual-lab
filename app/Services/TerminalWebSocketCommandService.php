@@ -152,7 +152,10 @@ class TerminalWebSocketCommandService
             'command' => $command,
             'status' => CommandLogStatus::Allowed,
             'executed_at' => now(),
-            'metadata' => ['source' => 'terminal-websocket'],
+            'metadata' => [
+                'source' => 'terminal-websocket',
+                'temporary_username' => $terminalSession->temporaryUsername(),
+            ],
         ]);
     }
 

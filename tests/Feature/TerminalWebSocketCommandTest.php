@@ -14,6 +14,7 @@ use App\Services\SshCommandService;
 use App\Services\TerminalPtySessionService;
 use App\Services\TerminalWebSocketCommandService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Crypt;
 use ReflectionMethod;
 use Tests\TestCase;
 
@@ -249,6 +250,22 @@ class TerminalWebSocketCommandTest extends TestCase
         $terminalSession = $this->sharedPracticalTerminalSessionFor($user);
 
         $this->assertFalse($this->app->make(TerminalPtySessionService::class)->canOpen($terminalSession, $user));
+    }
+
+    public function test_shared_practical_vm_with_active_temporary_credential_can_use_pty_mode(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, sessionAttributes: [
+            'metadata' => [
+                'temporary_credential' => [
+                    'username' => 'jit_2601_abcd',
+                    'password_encrypted' => Crypt::encryptString('temporary-secret'),
+                    'status' => 'active',
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($this->app->make(TerminalPtySessionService::class)->canOpen($terminalSession, $user));
     }
 
     public function test_unauthorized_student_cannot_open_pty_for_another_users_vm(): void

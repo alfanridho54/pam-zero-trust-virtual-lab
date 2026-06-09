@@ -7,6 +7,7 @@ use App\Enums\TerminalSessionStatus;
 use App\Models\CommandLog;
 use App\Models\TerminalSession;
 use App\Models\User;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
 
 class TerminalPtySessionService
@@ -28,7 +29,7 @@ class TerminalPtySessionService
             && ! $vm->trashed()
             && $vm->status === 'running'
             && $terminalSession->canBeAccessedBy($user)
-            && $vm->isSelfServiceOwnedBy($user)
+            && ($vm->isSelfServiceOwnedBy($user) || $this->canOpenTemporarySharedPracticalSession($terminalSession, $user))
             && function_exists('proc_open')
             && $this->commandExists('ssh')
             && $this->hasSupportedAuthentication($terminalSession);
@@ -40,7 +41,7 @@ class TerminalPtySessionService
             throw new \RuntimeException('PTY mode is not available for this terminal session.');
         }
 
-        $credentials = $this->sshCommandService->resolveCredentials($terminalSession);
+        $credentials = $this->connectionCredentials($terminalSession, $user);
         $host = $terminalSession->ssh_host;
         $username = $credentials['username'] ?? $terminalSession->ssh_username ?? 'student';
         $port = (int) ($credentials['port'] ?? $terminalSession->ssh_port ?? 22);
@@ -116,6 +117,7 @@ class TerminalPtySessionService
                     'transport' => 'ssh-pty',
                     'pty_mode' => true,
                     'pty_method' => 'proc_open_ssh_tt',
+                    'temporary_username' => $terminalSession->temporaryUsername(),
                 ],
             ])->save();
         }
@@ -163,7 +165,10 @@ class TerminalPtySessionService
                     'command' => $command,
                     'status' => CommandLogStatus::Allowed,
                     'executed_at' => now(),
-                    'metadata' => ['source' => 'terminal-pty'],
+                    'metadata' => [
+                        'source' => 'terminal-pty',
+                        'temporary_username' => $terminalSession->temporaryUsername(),
+                    ],
                 ]);
             }
         }
@@ -171,13 +176,44 @@ class TerminalPtySessionService
 
     private function hasSupportedAuthentication(TerminalSession $terminalSession): bool
     {
-        $credentials = $this->sshCommandService->resolveCredentials($terminalSession);
+        $credentials = $this->connectionCredentials($terminalSession);
 
         if (($credentials['private_key'] ?? null) !== null) {
             return true;
         }
 
         return ($credentials['password'] ?? null) !== null && $this->commandExists('sshpass');
+    }
+
+    private function canOpenTemporarySharedPracticalSession(TerminalSession $terminalSession, User $user): bool
+    {
+        $terminalSession->loadMissing('vm');
+        $vm = $terminalSession->vm;
+
+        return $vm !== null
+            && $vm->isSharedPractical()
+            && $terminalSession->canBeAccessedBy($user)
+            && $terminalSession->temporaryCredentialIsActive();
+    }
+
+    private function connectionCredentials(TerminalSession $terminalSession, ?User $user = null): array
+    {
+        $terminalSession->loadMissing('vm');
+
+        if (
+            $terminalSession->vm?->isSharedPractical()
+            && $terminalSession->temporaryCredentialIsActive()
+        ) {
+            return [
+                'username' => $terminalSession->temporaryUsername(),
+                'password' => Crypt::decryptString($terminalSession->encryptedTemporaryPassword()),
+                'private_key' => null,
+                'port' => (int) ($terminalSession->ssh_port ?: 22),
+                'source' => 'terminal_session_temporary_password',
+            ];
+        }
+
+        return $this->sshCommandService->resolveCredentials($terminalSession);
     }
 
     private function commandExists(string $command): bool

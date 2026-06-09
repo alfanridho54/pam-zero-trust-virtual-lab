@@ -169,6 +169,79 @@ class TerminalSession extends Model
             && ($this->vm?->user_id === $user->id || (bool) $this->vm?->hasPracticalAccess($user));
     }
 
+    public function temporaryCredentialMetadata(): array
+    {
+        $metadata = $this->metadata ?? [];
+        $credential = $metadata['temporary_credential'] ?? [];
+
+        return is_array($credential) ? $credential : [];
+    }
+
+    public function hasTemporaryCredential(): bool
+    {
+        return $this->temporaryUsername() !== null;
+    }
+
+    public function temporaryUsername(): ?string
+    {
+        $username = $this->temporaryCredentialMetadata()['username'] ?? null;
+
+        return is_string($username) && $username !== '' ? $username : null;
+    }
+
+    public function encryptedTemporaryPassword(): ?string
+    {
+        $password = $this->temporaryCredentialMetadata()['password_encrypted'] ?? null;
+
+        return is_string($password) && $password !== '' ? $password : null;
+    }
+
+    public function temporaryCredentialStatus(): ?string
+    {
+        $status = $this->temporaryCredentialMetadata()['status'] ?? null;
+
+        return is_string($status) && $status !== '' ? $status : null;
+    }
+
+    public function temporaryCredentialIsActive(): bool
+    {
+        return $this->temporaryCredentialStatus() === 'active'
+            && $this->temporaryUsername() !== null
+            && $this->encryptedTemporaryPassword() !== null;
+    }
+
+    public function temporaryCredentialNeedsCleanup(): bool
+    {
+        return $this->hasTemporaryCredential()
+            && ! in_array($this->temporaryCredentialStatus(), ['cleaned', 'already_removed', 'deleted', 'disabled'], true);
+    }
+
+    public function mergeTemporaryCredentialMetadata(array $temporaryCredential): bool
+    {
+        return $this->forceFill([
+            'metadata' => [
+                ...($this->metadata ?? []),
+                'temporary_credential' => [
+                    ...$this->temporaryCredentialMetadata(),
+                    ...$temporaryCredential,
+                ],
+            ],
+        ])->save();
+    }
+
+    public function markTemporaryCredentialCleanupPending(?Carbon $at = null): bool
+    {
+        if (! $this->temporaryCredentialNeedsCleanup()) {
+            return false;
+        }
+
+        return $this->mergeTemporaryCredentialMetadata([
+            'status' => 'cleanup_pending',
+            'cleanup_requested_at' => ($at ?? now())->toISOString(),
+            'last_error' => null,
+        ]);
+    }
+
     public function touchActivity(?Carbon $at = null): bool
     {
         return $this->forceFill([
@@ -193,10 +266,23 @@ class TerminalSession extends Model
 
     private function finish(TerminalSessionStatus $status, ?Carbon $endedAt = null): bool
     {
+        $endedAt ??= now();
+        $metadata = $this->metadata ?? [];
+
+        if ($this->temporaryCredentialNeedsCleanup()) {
+            $metadata['temporary_credential'] = [
+                ...$this->temporaryCredentialMetadata(),
+                'status' => 'cleanup_pending',
+                'cleanup_requested_at' => $endedAt->toISOString(),
+                'last_error' => null,
+            ];
+        }
+
         // Satu jalur finalisasi menjaga closed/expired/revoked konsisten untuk audit dan dashboard SOC.
         return $this->forceFill([
             'status' => $status,
-            'ended_at' => $endedAt ?? now(),
+            'ended_at' => $endedAt,
+            'metadata' => $metadata,
         ])->save();
     }
 }

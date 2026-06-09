@@ -229,7 +229,7 @@ class TerminalWebSocketServer extends Command
                     'vm_id' => $session->vm_id,
                     'user_id' => $user->id,
                     'host' => $session->ssh_host,
-                    'username' => $session->ssh_username,
+                    'username' => $session->temporaryUsername() ?: $session->ssh_username,
                     'port' => $session->ssh_port,
                     'pty_method' => 'proc_open_ssh_tt',
                     'exception_class' => $exception::class,
@@ -248,7 +248,7 @@ class TerminalWebSocketServer extends Command
         $this->sendClient($clientId, [
             'type' => 'ready',
             'mode' => $mode,
-            'prompt' => ($session->ssh_username ?: 'student').'@'.($session->ssh_host ?: 'virtual-lab'),
+            'prompt' => ($session->temporaryUsername() ?: $session->ssh_username ?: 'student').'@'.($session->ssh_host ?: 'virtual-lab'),
         ]);
 
         if ($mode === 'pty') {

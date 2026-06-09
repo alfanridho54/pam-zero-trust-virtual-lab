@@ -12,7 +12,9 @@ use App\Services\ProxmoxService;
 use App\Services\SshCommandResult;
 use App\Services\SshCommandService;
 use App\Services\SshReadinessService;
+use App\Services\TemporaryVmCredentialService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
@@ -250,6 +252,113 @@ class TerminalCommandExecutionTest extends TestCase
 
         $this->assertSame('172.16.1.29', $vm->metadata['ssh_host']);
         $this->assertSame('172.16.1.29', $vm->metadata['ip_address']);
+    }
+
+    public function test_temporary_vm_username_is_generated_safely(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user);
+        $service = new TemporaryVmCredentialService(new SshCommandService());
+
+        $username = $service->generateUsername($terminalSession);
+
+        $this->assertMatchesRegularExpression('/^jit_'.$terminalSession->id.'_[0-9a-f]{4}$/', $username);
+        $this->assertLessThanOrEqual(32, strlen($username));
+    }
+
+    public function test_shared_practical_terminal_session_creates_encrypted_temporary_credential(): void
+    {
+        $user = $this->student();
+        $vm = Vm::create([
+            'user_id' => null,
+            'name' => 'shared-practical-ubuntu',
+            'proxmox_id' => 'shared-jit-'.str()->random(8),
+            'node' => 'pve-mock',
+            'status' => 'running',
+            'cpu_cores' => 1,
+            'memory_mb' => 1024,
+            'disk_gb' => 10,
+            'metadata' => [
+                'shared_practical' => true,
+                'vmid' => 2601,
+                'ssh_host' => '127.0.0.1',
+                'ssh_port' => 22,
+                'ssh_username' => 'student',
+                'ssh_password' => 'metadata-secret',
+            ],
+        ]);
+        $vm->practicalAccesses()->create(['user_id' => $user->id]);
+
+        $this->app->instance(TemporaryVmCredentialService::class, new class extends TemporaryVmCredentialService
+        {
+            public function __construct()
+            {
+            }
+
+            public function createTemporaryUser(Vm $vm, TerminalSession $session): array
+            {
+                $password = 'plain-temporary-password';
+                $session->mergeTemporaryCredentialMetadata([
+                    'enabled' => true,
+                    'username' => 'jit_'.$session->id.'_abcd',
+                    'password_encrypted' => Crypt::encryptString($password),
+                    'status' => 'active',
+                    'created_at' => now()->toISOString(),
+                ]);
+
+                return [
+                    'username' => 'jit_'.$session->id.'_abcd',
+                    'password' => $password,
+                ];
+            }
+        });
+
+        $this->actingAs($user)
+            ->post(route('terminal-sessions.store', $vm))
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $terminalSession = TerminalSession::where('user_id', $user->id)
+            ->where('vm_id', $vm->id)
+            ->firstOrFail();
+        $credential = $terminalSession->temporaryCredentialMetadata();
+
+        $this->assertSame('active', $credential['status']);
+        $this->assertSame('jit_'.$terminalSession->id.'_abcd', $credential['username']);
+        $this->assertNotSame('plain-temporary-password', $credential['password_encrypted']);
+        $this->assertSame('plain-temporary-password', Crypt::decryptString($credential['password_encrypted']));
+        $this->assertStringNotContainsString('plain-temporary-password', json_encode($terminalSession->metadata, JSON_THROW_ON_ERROR));
+    }
+
+    public function test_shared_practical_access_is_enforced_before_temporary_user_creation(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, grantAccess: false);
+        $vm = $terminalSession->vm;
+        $called = new class
+        {
+            public bool $value = false;
+        };
+
+        $this->app->instance(TemporaryVmCredentialService::class, new class($called) extends TemporaryVmCredentialService
+        {
+            public function __construct(private object $called)
+            {
+            }
+
+            public function createTemporaryUser(Vm $vm, TerminalSession $session): array
+            {
+                $this->called->value = true;
+
+                return [];
+            }
+        });
+
+        $this->actingAs($user)
+            ->post(route('terminal-sessions.store', $vm))
+            ->assertForbidden();
+
+        $this->assertFalse($called->value);
     }
 
     public function test_student_with_shared_practical_access_can_execute_command(): void
@@ -949,6 +1058,293 @@ class TerminalCommandExecutionTest extends TestCase
             ->assertSessionHas('status');
 
         $this->assertTrue($terminalSession->refresh()->isEnded());
+    }
+
+    public function test_temporary_vm_credential_cleanup_is_marked_pending_when_session_closes(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, sessionAttributes: [
+            'status' => TerminalSessionStatus::Active,
+            'metadata' => [
+                'temporary_credential' => [
+                    'username' => 'jit_close_abcd',
+                    'password_encrypted' => Crypt::encryptString('temporary-secret'),
+                    'status' => 'active',
+                ],
+            ],
+        ]);
+
+        $this->actingAs($user)
+            ->delete(route('terminal-sessions.destroy', $terminalSession))
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $this->assertSame('cleanup_pending', $terminalSession->refresh()->temporaryCredentialStatus());
+    }
+
+    public function test_admin_revoke_marks_temporary_credential_cleanup_pending_without_running_cleanup(): void
+    {
+        $admin = $this->admin();
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, sessionAttributes: [
+            'status' => TerminalSessionStatus::Active,
+            'metadata' => [
+                'temporary_credential' => [
+                    'username' => 'jit_revoke_abcd',
+                    'password_encrypted' => Crypt::encryptString('temporary-secret'),
+                    'status' => 'active',
+                ],
+            ],
+        ]);
+        $calls = new class
+        {
+            public int $count = 0;
+        };
+
+        $this->app->instance(TemporaryVmCredentialService::class, new class($calls) extends TemporaryVmCredentialService
+        {
+            public function __construct(private object $calls)
+            {
+            }
+
+            public function disableTemporaryUser(?Vm $vm, TerminalSession $session): void
+            {
+                $this->calls->count++;
+            }
+        });
+
+        $this->actingAs($admin)
+            ->post(route('terminal-sessions.revoke', $terminalSession))
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $terminalSession->refresh();
+
+        $this->assertSame(0, $calls->count);
+        $this->assertSame(TerminalSessionStatus::Revoked, $terminalSession->status);
+        $this->assertSame('cleanup_pending', $terminalSession->temporaryCredentialStatus());
+    }
+
+    public function test_temporary_vm_credential_cleanup_is_marked_pending_for_revoked_and_expired_sessions(): void
+    {
+        $user = $this->student();
+        $revokedSession = $this->sharedPracticalTerminalSessionFor($user, sessionAttributes: [
+            'metadata' => [
+                'temporary_credential' => [
+                    'username' => 'jit_revoke_abcd',
+                    'password_encrypted' => Crypt::encryptString('temporary-secret'),
+                    'status' => 'active',
+                ],
+            ],
+        ]);
+        $expiredSession = $this->sharedPracticalTerminalSessionFor($user, sessionAttributes: [
+            'expires_at' => now()->subMinute(),
+            'metadata' => [
+                'temporary_credential' => [
+                    'username' => 'jit_expire_abcd',
+                    'password_encrypted' => Crypt::encryptString('temporary-secret'),
+                    'status' => 'active',
+                ],
+            ],
+        ]);
+
+        $revokedSession->revoke();
+        $expiredSession->expireIfPastDue();
+
+        $this->assertSame('cleanup_pending', $revokedSession->refresh()->temporaryCredentialStatus());
+        $this->assertSame('cleanup_pending', $expiredSession->refresh()->temporaryCredentialStatus());
+    }
+
+    public function test_temporary_vm_credential_cleanup_command_marks_credential_cleaned(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, sessionAttributes: [
+            'status' => TerminalSessionStatus::Closed,
+            'ended_at' => now(),
+            'metadata' => [
+                'temporary_credential' => [
+                    'username' => 'jit_clean_abcd',
+                    'password_encrypted' => Crypt::encryptString('temporary-secret'),
+                    'status' => 'cleanup_pending',
+                ],
+            ],
+        ]);
+
+        $this->app->instance(TemporaryVmCredentialService::class, new class extends TemporaryVmCredentialService
+        {
+            public function __construct()
+            {
+            }
+
+            public function disableTemporaryUser(?Vm $vm, TerminalSession $session): void
+            {
+                $session->mergeTemporaryCredentialMetadata([
+                    'status' => 'cleaned',
+                    'cleaned_at' => now()->toISOString(),
+                    'last_error' => null,
+                ]);
+            }
+        });
+
+        $this->artisan('terminal:sessions:cleanup-temporary-users')
+            ->expectsOutput('Expired sessions: 0')
+            ->expectsOutput('Cleanup attempted: 1')
+            ->expectsOutput('Cleanup completed: 1')
+            ->assertExitCode(0);
+
+        $this->assertSame('cleaned', $terminalSession->refresh()->temporaryCredentialStatus());
+    }
+
+    public function test_temporary_vm_credential_cleanup_command_handles_missing_linux_user_idempotently(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, sessionAttributes: [
+            'status' => TerminalSessionStatus::Revoked,
+            'ended_at' => now(),
+            'metadata' => [
+                'temporary_credential' => [
+                    'username' => 'jit_missing_abcd',
+                    'password_encrypted' => Crypt::encryptString('temporary-secret'),
+                    'status' => 'cleanup_failed',
+                    'last_error' => 'previous cleanup attempt failed',
+                ],
+            ],
+        ]);
+
+        $this->app->instance(TemporaryVmCredentialService::class, new class extends TemporaryVmCredentialService
+        {
+            public function __construct()
+            {
+            }
+
+            public function disableTemporaryUser(?Vm $vm, TerminalSession $session): void
+            {
+                $session->mergeTemporaryCredentialMetadata([
+                    'status' => 'already_removed',
+                    'cleaned_at' => now()->toISOString(),
+                    'last_error' => null,
+                ]);
+            }
+        });
+
+        $this->artisan('terminal:sessions:cleanup-temporary-users')
+            ->expectsOutput('Cleanup attempted: 1')
+            ->assertExitCode(0);
+
+        $this->assertSame('already_removed', $terminalSession->refresh()->temporaryCredentialStatus());
+        $this->assertNull($terminalSession->temporaryCredentialMetadata()['last_error']);
+    }
+
+    public function test_temporary_vm_credential_cleanup_command_records_failure_without_ui_request(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, sessionAttributes: [
+            'status' => TerminalSessionStatus::Revoked,
+            'ended_at' => now(),
+            'metadata' => [
+                'temporary_credential' => [
+                    'username' => 'jit_fail_abcd',
+                    'password_encrypted' => Crypt::encryptString('temporary-secret'),
+                    'status' => 'cleanup_pending',
+                ],
+            ],
+        ]);
+
+        $this->app->instance(TemporaryVmCredentialService::class, new class extends TemporaryVmCredentialService
+        {
+            public function __construct()
+            {
+            }
+
+            public function disableTemporaryUser(?Vm $vm, TerminalSession $session): void
+            {
+                throw new \RuntimeException('cleanup sudo failed');
+            }
+        });
+
+        $this->artisan('terminal:sessions:cleanup-temporary-users')
+            ->expectsOutput('Cleanup attempted: 1')
+            ->expectsOutput('Cleanup failed: 1')
+            ->assertExitCode(1);
+
+        $this->assertSame('cleanup_failed', $terminalSession->refresh()->temporaryCredentialStatus());
+        $this->assertSame('cleanup sudo failed', $terminalSession->temporaryCredentialMetadata()['last_error']);
+    }
+
+    public function test_temporary_vm_credential_cleanup_command_expires_sessions_and_cleans_credentials(): void
+    {
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, sessionAttributes: [
+            'status' => TerminalSessionStatus::Active,
+            'expires_at' => now()->subMinute(),
+            'metadata' => [
+                'temporary_credential' => [
+                    'username' => 'jit_expired_abcd',
+                    'password_encrypted' => Crypt::encryptString('temporary-secret'),
+                    'status' => 'active',
+                ],
+            ],
+        ]);
+
+        $this->app->instance(TemporaryVmCredentialService::class, new class extends TemporaryVmCredentialService
+        {
+            public function __construct()
+            {
+            }
+
+            public function disableTemporaryUser(?Vm $vm, TerminalSession $session): void
+            {
+                $session->mergeTemporaryCredentialMetadata([
+                    'status' => 'cleaned',
+                    'cleaned_at' => now()->toISOString(),
+                ]);
+            }
+        });
+
+        $this->artisan('terminal:sessions:cleanup-temporary-users')
+            ->expectsOutput('Expired sessions: 1')
+            ->expectsOutput('Cleanup attempted: 1')
+            ->assertExitCode(0);
+
+        $terminalSession->refresh();
+
+        $this->assertSame(TerminalSessionStatus::Expired, $terminalSession->status);
+        $this->assertSame('cleaned', $terminalSession->temporaryCredentialStatus());
+    }
+
+    public function test_opening_duplicate_shared_practical_terminal_marks_old_session_cleanup_pending(): void
+    {
+        $user = $this->student();
+        $oldSession = $this->sharedPracticalTerminalSessionFor($user, sessionAttributes: [
+            'status' => TerminalSessionStatus::Active,
+            'metadata' => [
+                'temporary_credential' => [
+                    'username' => 'jit_old_abcd',
+                    'password_encrypted' => Crypt::encryptString('temporary-secret'),
+                    'status' => 'active',
+                ],
+            ],
+        ]);
+        $vm = $oldSession->vm;
+
+        $this->app->instance(SshReadinessService::class, new class extends SshReadinessService
+        {
+            public function waitUntilReachable(string $host, int $port, ?int $attempts = null, ?int $delayMilliseconds = null, ?float $timeoutSeconds = null): bool
+            {
+                return true;
+            }
+        });
+
+        $this->actingAs($user)
+            ->post(route('terminal-sessions.store', $vm))
+            ->assertRedirect()
+            ->assertSessionHas('status');
+
+        $oldSession->refresh();
+
+        $this->assertSame(TerminalSessionStatus::Closed, $oldSession->status);
+        $this->assertSame('cleanup_pending', $oldSession->temporaryCredentialStatus());
+        $this->assertSame(1, TerminalSession::where('user_id', $user->id)->where('vm_id', $vm->id)->whereNull('ended_at')->count());
     }
 
     public function test_admin_closing_terminal_session_returns_to_admin_vm_page(): void
