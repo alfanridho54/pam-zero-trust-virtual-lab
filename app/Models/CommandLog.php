@@ -35,6 +35,25 @@ class CommandLog extends Model
         '/\b(chmod|chown)\s+(-[A-Za-z]*R[A-Za-z]*|--recursive)\s+[^;&|]*\//i',
     ];
 
+    public const JIT_SHARED_BLOCKED_COMMAND_PATTERNS = [
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?(?:passwd|chpasswd|useradd|usermod|userdel|groupadd|groupmod|groupdel)(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?(?:reboot|shutdown|poweroff|halt)(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?systemctl\s+(?:reboot|poweroff)(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?systemctl\s+restart\s+(?:networking|NetworkManager)(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?netplan\s+apply(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?nmcli(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?ifconfig(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?ip\s+link\s+set(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?ip\s+addr\s+(?:add|del)(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?ip\s+route\s+(?:add|del)(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?(?:iptables|ufw)(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?apt\s+(?:install|remove|purge)(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?dpkg\s+-i(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?(?:mkfs(?:\.\w+)?|fdisk|parted)(?:\s|$)/i',
+        '/(?:^|[;&|]\s*)(?:sudo\s+)?dd\s+.*\bif=/i',
+        '/\brm\s+-rf\s+\/(?:\s|$)/i',
+    ];
+
     /**
      * Backward-compatible alias for the strict shared-practical policy.
      */
@@ -210,8 +229,10 @@ class CommandLog extends Model
 
     private static function blockedPatternsFor(string $policy): array
     {
-        return $policy === 'relaxed'
-            ? self::RELAXED_BLOCKED_COMMAND_PATTERNS
-            : self::STRICT_BLOCKED_COMMAND_PATTERNS;
+        return match ($policy) {
+            'relaxed' => self::RELAXED_BLOCKED_COMMAND_PATTERNS,
+            'jit_shared' => self::JIT_SHARED_BLOCKED_COMMAND_PATTERNS,
+            default => self::STRICT_BLOCKED_COMMAND_PATTERNS,
+        };
     }
 }

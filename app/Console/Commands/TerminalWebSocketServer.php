@@ -2,6 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\CommandLogStatus;
+use App\Models\CommandLog;
 use App\Models\TerminalSession;
 use App\Models\User;
 use App\Services\TerminalPtyProcess;
@@ -142,6 +144,10 @@ class TerminalWebSocketServer extends Command
                     return;
                 }
 
+                if ($this->blockSharedPracticalPtyCommandIfNeeded($clientId, $command)) {
+                    return;
+                }
+
                 $this->writePty($clientId, $command."\n", $ptyService, true);
 
                 return;
@@ -270,6 +276,52 @@ class TerminalWebSocketServer extends Command
         if ($result->type !== 'ignored') {
             $this->sendClient($clientId, $result->toPayload());
         }
+    }
+
+    private function blockSharedPracticalPtyCommandIfNeeded(int $clientId, string $command): bool
+    {
+        /** @var TerminalSession|null $session */
+        $session = $this->clients[$clientId]['session'] ?? null;
+        /** @var User|null $user */
+        $user = $this->clients[$clientId]['user'] ?? null;
+
+        if (! $session || ! $user) {
+            return false;
+        }
+
+        $session->loadMissing('vm');
+
+        if (! $session->vm?->isSharedPractical()) {
+            return false;
+        }
+
+        $blockedReason = CommandLog::blockedReasonFor($command, 'jit_shared');
+
+        if ($blockedReason === null) {
+            return false;
+        }
+
+        $commandLog = CommandLog::create([
+            'terminal_session_id' => $session->id,
+            'user_id' => $user->id,
+            'vm_id' => $session->vm_id,
+            'command' => $command,
+            'status' => CommandLogStatus::Allowed,
+            'executed_at' => now(),
+            'metadata' => [
+                'source' => 'terminal-pty',
+                'policy' => 'jit_shared',
+                'temporary_username' => $session->temporaryUsername(),
+            ],
+        ]);
+        $commandLog->markBlocked($blockedReason);
+
+        $this->sendClient($clientId, [
+            'type' => 'pty_output',
+            'output' => "\r\n\033[31m[PAM] Command diblokir: {$blockedReason}\033[0m\r\n",
+        ]);
+
+        return true;
     }
 
     private function writePty(int $clientId, string $input, TerminalPtySessionService $ptyService, bool $logCommand = false): void

@@ -346,6 +346,15 @@
                         }
 
                         if (message.type === 'pty_output') {
+                            const output = String(message.output || '');
+                            
+                            // Detect PAM blocked message (contains ANSI red codes)
+                            if (output.includes('[PAM] Command diblokir')) {
+                                const clean = output.replace(/\x1b\[[0-9;]*m/g, '').trim();
+                                writeLine(clean, 'text-red-400');
+                                return;
+                            }
+                            
                             String(message.output || '').split(/\r?\n/).forEach((line) => writeLine(line, 'text-slate-300'));
                             return;
                         }
@@ -375,6 +384,30 @@
                     });
                 };
 
+                const commandHistory = [];
+                let historyIndex = -1;
+
+                input.addEventListener('keydown', (event) => {
+                    if (commandHistory.length === 0) return;
+
+                    if (event.key === 'ArrowUp') {
+                        event.preventDefault();
+                        historyIndex = Math.min(historyIndex + 1, commandHistory.length - 1);
+                        input.value = commandHistory[historyIndex];
+                    }
+
+                    if (event.key === 'ArrowDown') {
+                        event.preventDefault();
+                        if (historyIndex <= 0) {
+                            historyIndex = -1;
+                            input.value = '';
+                            return;
+                        }
+                        historyIndex--;
+                        input.value = commandHistory[historyIndex];
+                    }
+                });
+
                 form.addEventListener('submit', (event) => {
                     event.preventDefault();
                     const command = input.value.trim();
@@ -383,6 +416,8 @@
                         return;
                     }
 
+                    commandHistory.unshift(command);
+                    historyIndex = -1;
                     socket.send(JSON.stringify({ type: 'command', command }));
                     input.value = '';
                 });

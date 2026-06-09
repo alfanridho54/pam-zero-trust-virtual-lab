@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\CommandLogStatus;
 use App\Enums\TerminalSessionStatus;
 use App\Console\Commands\TerminalWebSocketServer;
+use App\Models\CommandLog;
 use App\Models\TerminalSession;
 use App\Models\User;
 use App\Models\Vm;
@@ -266,6 +267,154 @@ class TerminalWebSocketCommandTest extends TestCase
         ]);
 
         $this->assertTrue($this->app->make(TerminalPtySessionService::class)->canOpen($terminalSession, $user));
+    }
+
+    public function test_jit_shared_command_policy_blocks_high_risk_admin_commands(): void
+    {
+        foreach ([
+            'useradd',
+            'useradd test',
+            'sudo useradd test',
+            'passwd',
+            'sudo reboot',
+            'netplan apply',
+            'chpasswd',
+            'sudo usermod test',
+            'groupadd lab',
+            'systemctl restart networking',
+            'systemctl restart NetworkManager',
+            'ip link set eth0 down',
+            'ip addr add 10.0.0.2/24 dev eth0',
+            'ip route del default',
+            'apt install nginx',
+            'dpkg -i package.deb',
+            'dd if=/dev/zero of=/tmp/blob',
+            'rm -rf /',
+        ] as $command) {
+            $this->assertNotNull(CommandLog::blockedReasonFor($command, 'jit_shared'), "Expected [{$command}] to be blocked.");
+        }
+    }
+
+    public function test_jit_shared_command_policy_allows_safe_basic_commands(): void
+    {
+        foreach ([
+            'whoami',
+            'pwd',
+            'ls -la',
+            'cd /tmp',
+            'mkdir test',
+            'touch hello.txt',
+            'cat hello.txt',
+            'echo hello',
+            'nano hello.txt',
+            'vim hello.txt',
+            'grep foo hello.txt',
+            'find . -name hello.txt',
+            'head hello.txt',
+            'tail hello.txt',
+            'date',
+            'id',
+            'groups',
+            'ip a',
+            'ip addr show',
+            'ss -tulpn',
+            'curl https://example.com',
+        ] as $command) {
+            $this->assertNull(CommandLog::blockedReasonFor($command, 'jit_shared'), "Expected [{$command}] to be allowed.");
+        }
+    }
+
+    public function test_shared_practical_pty_command_is_blocked_logged_and_warned_before_write(): void
+    {
+        if (! function_exists('stream_socket_pair')) {
+            $this->markTestSkipped('stream_socket_pair is not available in this PHP build.');
+        }
+
+        [$client, $server] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        $user = $this->student();
+        $terminalSession = $this->sharedPracticalTerminalSessionFor($user, sessionAttributes: [
+            'status' => TerminalSessionStatus::Active,
+            'metadata' => [
+                'temporary_credential' => [
+                    'username' => 'jit_2601_abcd',
+                    'password_encrypted' => Crypt::encryptString('temporary-secret'),
+                    'status' => 'active',
+                ],
+            ],
+        ]);
+        $serverCommand = $this->app->make(TerminalWebSocketServer::class);
+        $clientId = (int) $server;
+
+        $clients = new \ReflectionProperty(TerminalWebSocketServer::class, 'clients');
+        $clients->setAccessible(true);
+        $clients->setValue($serverCommand, [
+            $clientId => [
+                'socket' => $server,
+                'session' => $terminalSession,
+                'user' => $user,
+                'authed' => true,
+                'mode' => 'pty',
+            ],
+        ]);
+
+        $block = new ReflectionMethod(TerminalWebSocketServer::class, 'blockSharedPracticalPtyCommandIfNeeded');
+        $block->setAccessible(true);
+
+        $this->assertTrue($block->invoke($serverCommand, $clientId, 'useradd test'));
+        $this->assertDatabaseHas('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'user_id' => $user->id,
+            'command' => 'useradd test',
+            'status' => CommandLogStatus::Blocked->value,
+            'blocked_reason' => 'Command diblokir oleh policy terminal.',
+        ]);
+
+        $payload = $this->decodeServerWebSocketFrame($client);
+        $this->assertSame('pty_output', $payload['type']);
+        $this->assertStringContainsString("\033[31m[PAM] Command diblokir: Command diblokir oleh policy terminal.\033[0m", $payload['output']);
+
+        fclose($client);
+        fclose($server);
+    }
+
+    public function test_self_service_pty_command_is_not_filtered_by_jit_shared_policy(): void
+    {
+        if (! function_exists('stream_socket_pair')) {
+            $this->markTestSkipped('stream_socket_pair is not available in this PHP build.');
+        }
+
+        [$client, $server] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        $user = $this->student();
+        $terminalSession = $this->terminalSessionFor($user, [
+            'status' => TerminalSessionStatus::Active,
+        ]);
+        $serverCommand = $this->app->make(TerminalWebSocketServer::class);
+        $clientId = (int) $server;
+
+        $clients = new \ReflectionProperty(TerminalWebSocketServer::class, 'clients');
+        $clients->setAccessible(true);
+        $clients->setValue($serverCommand, [
+            $clientId => [
+                'socket' => $server,
+                'session' => $terminalSession,
+                'user' => $user,
+                'authed' => true,
+                'mode' => 'pty',
+            ],
+        ]);
+
+        $block = new ReflectionMethod(TerminalWebSocketServer::class, 'blockSharedPracticalPtyCommandIfNeeded');
+        $block->setAccessible(true);
+
+        $this->assertFalse($block->invoke($serverCommand, $clientId, 'passwd'));
+        $this->assertDatabaseMissing('command_logs', [
+            'terminal_session_id' => $terminalSession->id,
+            'command' => 'passwd',
+            'status' => CommandLogStatus::Blocked->value,
+        ]);
+
+        fclose($client);
+        fclose($server);
     }
 
     public function test_unauthorized_student_cannot_open_pty_for_another_users_vm(): void
@@ -542,6 +691,31 @@ class TerminalWebSocketCommandTest extends TestCase
         return User::factory()->create([
             'role' => 'student',
         ]);
+    }
+
+    /**
+     * @param resource $socket
+     * @return array<string, mixed>
+     */
+    private function decodeServerWebSocketFrame($socket): array
+    {
+        stream_set_blocking($socket, true);
+        $data = fread($socket, 8192);
+        $this->assertIsString($data);
+        $this->assertGreaterThanOrEqual(2, strlen($data));
+
+        $length = ord($data[1]) & 127;
+        $offset = 2;
+
+        if ($length === 126) {
+            $length = (int) (unpack('nlength', substr($data, 2, 2))['length'] ?? 0);
+            $offset = 4;
+        } elseif ($length === 127) {
+            $length = (int) (unpack('Jlength', substr($data, 2, 8))['length'] ?? 0);
+            $offset = 10;
+        }
+
+        return json_decode(substr($data, $offset, $length), true, flags: JSON_THROW_ON_ERROR);
     }
 
     private function terminalSessionFor(User $user, array $sessionAttributes = [], array $vmMetadata = []): TerminalSession
